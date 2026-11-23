@@ -1,16 +1,40 @@
 # Scena
 
-**Edit shared object groups in place in Blender. Every linked instance updates as you work.**
+**Edit one. Update every linked instance.**
 
-[**Download Scena 0.3.1**](https://github.com/VictoryLuode/Blender-Scena/releases/download/v0.3.1/Scena-0.3.1.zip) · [All releases](https://github.com/VictoryLuode/Blender-Scena/releases) · [Install](#install) · [Quick start](#quick-start) · [User guide](docs/user-guide.md)
+Scena is a Blender extension for editing shared object groups in place.
+
+[![Scena in the Blender viewport. A blue outline marks the group being edited, beside its two linked instances.](docs/scena-cover.jpg)](docs/media/scena-showcase.mp4)
+
+[**Download Scena 0.3.1**](https://github.com/VictoryLuode/Blender-Scena/releases/download/v0.3.1/Scena-0.3.1.zip) · [Showcase video (1080p)](docs/media/scena-showcase.mp4) · [Quick start](#quick-start) · [User guide](docs/user-guide.md)
 
 Requires **Blender 5.3.0 or later**. Tested in Blender 5.3.0.
 
-![Scena workflow illustration. A blue outline marks the workstation being edited, with two linked instances beside it.](docs/scena-cover.jpg)
+## See Scena in action
 
-- **Edit in place.** Open a group from the 3D Viewport and move its members or edit their meshes where they appear in the scene.
-- **Keep copies in sync.** Place the same group across a scene and edit any instance to update the shared definition.
-- **Make variants.** Choose whether a copy shares its group definition, nested groups, mesh data, or materials.
+### Edit linked instances in place
+
+Edit the tabletop in one workstation and watch every linked copy update in the viewport.
+
+![The active workstation's tabletop rises together with both linked copies.](docs/media/scena-shared-edit.gif)
+
+### Make a single-user variant
+
+Use **Make Single User → Group and Data**, then change the right workstation independently.
+
+![Only the right workstation's tabletop rises.](docs/media/scena-unique-variant.gif)
+
+### Edit a nested group
+
+Open a child group to adjust the display assembly directly inside the workstation.
+
+![The display assemblies rise together while the workstations stay put.](docs/media/scena-nested-edit.gif)
+
+### Place a group from the Group Library
+
+Choose an existing definition and place a new linked instance at the 3D Cursor.
+
+![A second workstation appears at the 3D Cursor after choosing the group definition.](docs/media/scena-group-library.gif)
 
 ## Install
 
