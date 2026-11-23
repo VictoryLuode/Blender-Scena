@@ -1,54 +1,39 @@
-# Scena 0.3.1
+# Scena
 
-Scena 用于在 Blender 中创建和编辑共享组。例如，把桌板、支架和显示器组成一个工位，再摆放多个实例。进入任意一处调整桌板，其余同源工位会同步更新。
+**Edit shared object groups in place in Blender. Every linked instance updates as you work.**
 
-适用于 Blender 5.3。打开 **编辑 → 偏好设置 → 获取扩展**，在右上角菜单选择 **从磁盘安装**，选中 ZIP 并启用 Scena。在 3D 视图按 **N**，打开 **Item → Group**。对象模式下也可以按 **E** 打开 Scena 饼菜单。[下载 Scena 0.3.1 安装包](../../releases/download/v0.3.1/Scena-0.3.1.zip)
+[**Download Scena 0.3.1**](https://github.com/VictoryLuode/Blender-Scena/releases/download/v0.3.1/Scena-0.3.1.zip) · [All releases](https://github.com/VictoryLuode/Blender-Scena/releases) · [Install](#install) · [Quick start](#quick-start) · [User guide](docs/user-guide.md)
 
-## 创建、共享与独立
+Requires **Blender 5.3.0 or later**. Tested in Blender 5.3.0.
 
-在对象模式按 **Shift+A → Group**，有选中物体时将所选物体建组，未选中物体时在 3D 光标处创建空组。Scena 为它创建独立的 Collection 作为 Data。选中组，打开 **对象属性 → Group Data**，点左侧图标可切换到已有组定义，中间可改名。多处共享时，点 **Make Group Unique** 可让当前组独立，成员网格继续共享。旁边的数字可查看使用位置。
+![Scena workflow illustration. A blue outline marks the workstation being edited, with two linked instances beside it.](docs/scena-cover.jpg)
 
-1. **创建组。** 在对象模式选中成员，点 **Group → Create Group**。按钮右侧的图标可切换集合实例组和几何节点组。名称留空时使用活动物体名。多选 Group 后，在 **Operations** 点 **Switch to Geometry Nodes** 或 **Switch to Collection**，即可把所选 Group 统一转为目标类型并保留各自的源集合。已是目标类型的组和混选的普通对象会跳过。
-2. **共享编辑。** 选中组，按 **Alt+D** 创建同源实例并移动到新位置。选中要编辑的那一处，按 **E → Edit Group**，在场景中直接移动成员或编辑网格。其余实例同步显示修改。按 **H** 隐藏的实例保持隐藏，视图层排除的实例也不会阻止进组。完成后按 **E → Back** 返回一层，Shift 点击 **Back** 可直接回到场景。需要在多处同时操作时，可先多选这些放置，再选择 **Edit Group**。
-3. **做出一个变体。** 在对象模式选中组，点击 **Duplicate** 主按钮直接按 **Shift+D** 的方式复制并移动，点右侧箭头可选择复制范围。三种方式也有对应快捷键。
+- **Edit in place.** Open a group from the 3D Viewport and move its members or edit their meshes where they appear in the scene.
+- **Keep copies in sync.** Place the same group across a scene and edit any instance to update the shared definition.
+- **Make variants.** Choose whether a copy shares its group definition, nested groups, mesh data, or materials.
 
-| 复制方式 | 默认快捷键 | 副本与原件共享的内容 |
-| --- | --- | --- |
-| **Instance** | Alt+D | 整个组定义，包括成员的位置和网格 |
-| **Group** | Shift+D | 副本有自己的顶层组定义，嵌套组和成员网格继续共享 |
-| **Group and Nested** | Shift+Alt+D | 顶层组和嵌套组都有自己的定义，成员网格继续共享 |
+## Install
 
-要让**已有放置**独立，可选中它并通过 **F3 → Make Single User** 执行。独立范围可选 **Group**、**Group and Data** 或 **Group, Data, and Materials**。例如，要单独修改一个工位的桌板网格，选 **Group and Data**；要连桌板材质也单独修改，选 **Group, Data, and Materials**。
+1. Download [`Scena-0.3.1.zip`](https://github.com/VictoryLuode/Blender-Scena/releases/download/v0.3.1/Scena-0.3.1.zip) from Releases.
+2. In Blender, open **Edit → Preferences → Get Extensions**. Open the dropdown in the upper right and choose **Install from Disk…**.
+3. Select the ZIP file. In the 3D Viewport, press **N** and open **Item → Group**. In Object Mode, press **E** to open the Scena pie menu.
 
-## 导航与管理
+## Quick start
 
-- N 面板的 **Group** 和 **E 饼菜单** 都直接提供建组、复制、成员编辑、上下层级和拾取。E 饼菜单的上方直接显示 **Object** 面板，左侧是 **Edit Group / Edit Child Group**，右侧是 **Back**。下方排列组操作、**Pick** 和 **Group Library** 入口，四个斜角留空。**Duplicate**、**Operations** 和 **Group Library** 右侧都有下拉箭头，点击箭头可展开对应的选项或组库。组外选中 Group 时点 **Edit Group**，组内选中子组时点 **Edit Child Group**，选中普通成员时进入按钮置灰。**Back** 每次返回一层，在最外层返回场景。在 3D 视图的对象模式按 **Alt＋E** 启动 **Pick**。要自定义快捷键，在 Scena 插件设置的 **Group → Shortcuts → Pick** 一行点击键位，再按下新的组合键。编辑 Group 时也可拾取组外的可见目标。鼠标碰到模型表面时，同时显示拾取对象和当前拾取层级的 Group 信息框。左键单击选对象，中键单击选 Group。主视图中，Ctrl＋左键单击最前方的 Group 或子组进入一层；点到当前层的直属普通成员则返回上一层。进入 Group 后，当前层所有可见的直属对象和子组都会显示信息框，父组的 2D 外框包住子对象和子组。进入子组后，2D 和 3D Frame 都用虚线标记根组，用实线标记当前编辑组。组的 3D Frame 只沿当前视角下包围盒的外轮廓绘制，按层级留出间距，标签靠近投影后的角点。当前打开的组使用四边连通的蓝色 2D 外框，该层未选中的直属对象和子组使用同色信息框，选中的成员使用 Blender 主题高亮色。单击视口中的组名选中该组，双击组名进入对应层级；单击当前编辑组的外框名称会选中本层所有可选成员，子组按一个对象选中，顶部路径里的根组和中间层名称也可直接点击。在当前 Group 外框以外、鼠标下没有物体的空白处，普通左键双击会返回上一层。在根组时双击会退出组模式，回到场景。Ctrl＋左键双击直达最深层并选中成员。组外（含其他组和空白处）Ctrl＋单击退一层，Ctrl＋双击直接退回场景。Pick 内使用左键双击逐层导航，Shift＋左键双击直达最深层或退出全部层级。进入模式后，视图右下角显示操作提示。滚轮切换组层级，Shift＋滚轮切换重叠候选。**Operations → Select Linked** 可选中当前范围内可见、可选的同源实例。
-- N 面板和 E 饼菜单都将 **Ungroup** 放在 **Create Group** 正下方。点 **Ungroup** 右侧的扳手可切换 **Keep Modifiers**，点亮时拆组会保留组修改器。单击 **Ungroup** 拆组一层，按住 **Shift** 点击可展开全部嵌套层级。**Add** 和 **Remove** 用于增减组成员。**Operations** 提供 **Split Mirror** 和组类型切换。
-- 在对象模式中，选中 Group，通过 **Object → Set Origin** 或视口右键菜单设置原点。支持几何中心、3D 光标、表面质心和体积质心；这些操作会补偿同源组的位置。**Geometry to Origin** 会把共享几何移到原点，所有同源组都会显示这项变化。质心按组源的网格计算。
-- 修改器栈为 **Scena Group → Mirror** 时，Scena 会接入 Blender 或 Hard Ops 添加的原生 Mirror。**Scena Group → Output** 控制输出模式。默认选 **Instance** 时，Mirror 按选定的轴和参考物体镜像整个同源实例，即使模型穿过镜像面，两侧也共享源数据。选 **Mesh** 时，原生 Mirror 处理网格，Bisect 和 Merge 按修改器设置生效。
-- Hard Ops 添加的原生 **Array** 同样由 **Scena Group → Output** 控制。选 **Instance** 时复制同源实例，可在 Array 中调整数量与偏移。选 **Mesh** 时由原生 Array 阵列网格。Scena Group 后连续的多个 Array 可与一个 Mirror 按堆栈顺序组合。
-- **单个 Group 的原生网格修改器**：在 Geometry Nodes 类型的 Group 上将 **Scena Group → Output** 设为 **Mesh**，然后用 Blender 的 **Add Modifier** 添加倒角、布尔、实体化、细分、置换等。修改器属于当前放置。Scena 会让空网格载体上的组源排在栈首，并向原生修改器提供求值网格的顶点组和 UV 名称。Mask、Displace 和 UV Warp 可直接选择对应数据。使用 **Hook** 时，在源网格上设置顶点组权重，在当前 Group 的 Hook 修改器中选择目标对象和该顶点组。移动目标时，当前 Group 的顶点按权重跟随。物理缓存及 Multires 雕刻仍待验证。
-- 在 N 面板或 E 饼菜单底部点击 **Group Library** 打开组库，可按名称搜索组定义、查看本场景及其他场景的使用位置、定位嵌套放置。点定义旁的 **+** 可在 3D 光标处放置新实例。**Remove Unused Definitions** 用于清理没有放置且没有其他数据块引用的定义。
+| Step | In the 3D Viewport |
+| --- | --- |
+| **1. Group the objects** | Select the parts of a workstation, then choose **Group → Create Group** in the sidebar. |
+| **2. Place a linked copy** | Select the group, press **Alt+D**, and move the new instance. |
+| **3. Edit either copy** | Press **E → Edit Group** and move the tabletop or edit its mesh. The other instance updates as you work. Choose **E → Back** to exit. |
 
-## 插件设置
+Press **Shift+D** to copy the top-level group definition while keeping nested groups and member meshes shared. To make an existing placement independent at a specific level, use **F3 → Make Single User**. See [Duplicate and make variants](docs/user-guide.md#duplicate-and-make-variants) for the exact sharing rules.
 
-点击 **Group** 标题右侧的齿轮，或在 Blender 偏好设置中展开 **Scena**。
+## Further reading
 
-- **Tool** 收纳默认关闭的额外工具。**Pie Menus** 可启用和改绑 Save、Shader、Transform 和 Cursor and Origin 饼菜单。**Outliner** 中可设置「从所选项新建集合」的快捷键。
-- **Group** 设置建组时的默认名称、类型、原点、局部轴向和是否包含子物体，也可调整视口标题栏的编辑路径以及点击组名或物体的导航方式。**Shortcuts** 中可设置 Scena Pie 和 Pick 的快捷键。
-- **Display** 设置外框线宽、三维框和二维框的样式，以及哪些物体类型显示外框。
+- [User guide](docs/user-guide.md) covers group types, nested editing, picking, the Group Library, modifier stacks, and preferences.
+- [Performance and testing](docs/user-guide.md#performance-and-testing) documents the 1,000-instance benchmark and the tested workflows.
+- [Report an issue](https://github.com/VictoryLuode/Blender-Scena/issues) with your Blender version and steps to reproduce it.
 
-## 1,000 个实例的实测结果
+## License and credits
 
-在同一台机器的 Blender 5.3.0 后台进程中，用一个四边面建组并放置 1,000 个同源实例。计时从选中其中一处开始，到进入组编辑并退出为止。每个版本先预热一次，再测五次，取中位数。
-
-| 指标 | 优化前（0.2.3） | 0.2.4 |
-| --- | ---: | ---: |
-| 选择一处、进组、退组的总耗时 | 1,015.14 毫秒 | 65.47 毫秒 |
-| 单独编辑一处时新增的临时对象 | 2,000 个 | 2 个 |
-
-同条件下，进出组约快 **15.5 倍**。另一次同步检查移动了组内成员并修改了一个网格顶点，在编辑中和退组后分别核对全部 1,000 个实例，位置与网格均正确。[工作流与同步测试](tests/test_workflows.py)
-
-## 验证范围
-
-0.2.4 通过了 71 项后台工作流测试和 2 项嵌套深度测试。真实 Blender 窗口验证了嵌套组在旋转和非均匀缩放下的原位编辑、撤销与重做，以及编辑中保存后重新打开场景。0.3.0 安装包已在全新配置中安装，重启后成功创建集合实例组和几何节点组。[嵌套深度测试](tests/test_edit_depth.py) · [视口测试](tests/test_viewport.py) · [安装测试](tests/test_install.py)
+Scena is licensed under the [GNU General Public License v3.0 or later](scena/LICENSE). The bundled viewport icon font uses artwork by Blender contributors, derived from Blender’s [SVG interface icons](https://github.com/blender/blender/tree/02f0899d78e3/release/datafiles/icons_svg).
