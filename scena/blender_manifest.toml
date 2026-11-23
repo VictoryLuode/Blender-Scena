@@ -1,0 +1,16 @@
+schema_version = "1.0.0"
+id = "scena"
+version = "0.3.1"
+name = "Scena"
+tagline = "Edit shared asset groups and branch individual Link Groups"
+maintainer = "VictoryLuode"
+type = "add-on"
+tags = ["Object", "Scene"]
+blender_version_min = "5.3.0"
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+files = "Import, link, and export asset files selected by the user"
+
+[build]
+paths_exclude_pattern = ["__pycache__/", "*.pyc", ".*", "*.zip"]
