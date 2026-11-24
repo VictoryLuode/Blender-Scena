@@ -6,7 +6,7 @@ import bpy
 from bpy.app.handlers import persistent
 
 _MODULES = ("creation", "clipboard", "hotkeys", "preferences", "operations", "usage", "modeling", "picking", "hierarchy",
-            "layout_tools", "exchange", "origins", "tool_pies", "ui")
+            "layout_tools", "exchange", "interchange", "origins", "tool_pies", "ui")
 _registered_classes = []
 _installed_hooks = []
 
@@ -18,7 +18,7 @@ def register():
             for cls in module.CLASSES:
                 bpy.utils.register_class(cls)
                 _registered_classes.append(cls)
-        for name in ("editor", "usage", "ui", "hotkeys", "modeling", "origins", "instance_mirror", "modifier_inputs"):
+        for name in ("editor", "usage", "ui", "hotkeys", "modeling", "origins", "interchange", "instance_mirror", "modifier_inputs"):
             module = import_module("." + name, __package__)
             module.register()
             _installed_hooks.append(module)

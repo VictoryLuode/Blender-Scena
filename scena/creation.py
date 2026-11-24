@@ -574,10 +574,6 @@ class GM_OT_create(bpy.types.Operator):
         return {'FINISHED'}
 
 
-def _definition_search(operator, context, edit_text):
-    return sorted(c.name_full for c in bpy.data.collections if hosts.is_definition(c))
-
-
 def _place_at_cursor(context, source, kind, name):
     target = _link_target(context)
     if _contains_collection(source, target):
@@ -617,54 +613,6 @@ class GM_OT_add_group(bpy.types.Operator):
             _place_at_cursor(context, source, settings.kind, name)
         except (ValueError, RuntimeError) as exc:
             bpy.data.collections.remove(source)
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
-        return {'FINISHED'}
-
-
-class GM_OT_place_existing(bpy.types.Operator):
-    bl_idname = "groupmanager.place_existing"
-    bl_label = "Add to Group"
-    bl_description = "Add an instance of a group in this file at the 3D cursor"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    definition_name: StringProperty(name="Definition", search=_definition_search)
-    definition_uid: StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
-    kind: EnumProperty(name="Group Type", items=KINDS, default=DEFAULT_KIND, options={'SKIP_SAVE'})
-
-    @classmethod
-    def poll(cls, context):
-        return context.mode == 'OBJECT' and any(hosts.is_definition(c) for c in bpy.data.collections)
-
-    def _use_current_kind(self, context):
-        if not self.properties.is_property_set("kind", ghost=False):
-            self.kind = current_settings(context).kind
-
-    def invoke(self, context, event):
-        self._use_current_kind(context)
-        source = hosts.definition(context.active_object)
-        if source and not self.definition_name:
-            self.definition_name = source.name
-        return context.window_manager.invoke_props_dialog(self)
-
-    def draw(self, context):
-        self.layout.prop(self, "definition_name", icon='OUTLINER_COLLECTION')
-        self.layout.prop(self, "kind")
-
-    def execute(self, context):
-        self._use_current_kind(context)
-        try:
-            candidates = [c for c in bpy.data.collections if self.definition_name in {c.name, c.name_full}
-                          and hosts.is_definition(c)]
-            if self.definition_uid:
-                candidates = [c for c in candidates if str(c.session_uid) == self.definition_uid]
-            if len(candidates) > 1:
-                raise ValueError("More than one asset has this name. Pick the library from the users panel")
-            source = candidates[0] if candidates else None
-            if source is None or not hosts.is_definition(source):
-                raise ValueError("Select an existing Scena definition")
-            _place_at_cursor(context, source, self.kind, source.name)
-        except (ValueError, RuntimeError) as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
         return {'FINISHED'}
@@ -902,7 +850,6 @@ CLASSES = (
     GM_OT_reset_create_defaults,
     GM_OT_create,
     GM_OT_add_group,
-    GM_OT_place_existing,
     GM_OT_duplicate_shared,
     GM_OT_duplicate_move,
     GM_OT_add_members,

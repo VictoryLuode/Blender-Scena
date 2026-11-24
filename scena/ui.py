@@ -20,27 +20,6 @@ class ObjectProperties:
     bl_context = 'object'
 
 
-def _full_row(layout):
-    """Text button plus a right icon, both rows sharing the same full width."""
-    row = layout.row(align=True)
-    return row.split(factor=0.86, align=True)
-
-
-def create_group_row(layout, context):
-    settings = creation.current_settings(context)
-    kind_icon = 'GEOMETRY_NODES' if settings.kind == 'NODES' else 'OUTLINER_COLLECTION'
-    split = _full_row(layout)
-    split.operator("groupmanager.create", text="Create Group", icon='NEWFOLDER')
-    split.operator("groupmanager.cycle_create_kind", text="", icon=kind_icon)
-
-
-def clear_controls(layout, context):
-    split = _full_row(layout)
-    split.operator_context = 'INVOKE_REGION_WIN'
-    split.operator("groupmanager.dissolve", icon='GROUP')
-    split.prop(context.window_manager, "gm_keep_group_modifiers", text="", icon='MODIFIER', toggle=True)
-
-
 def _shown_group(context):
     """The group whose details Info should show."""
     obj = context.active_object
@@ -256,8 +235,7 @@ def edit_navigation(layout, context, *, radial=False):
         enter = controls.row(align=True)
         enter.enabled = False
     enter.operator_context = 'EXEC_DEFAULT'
-    label = "Edit Child Group" if route else "Edit Group"
-    enter.operator("groupmanager.edit", text=label, icon='OUTLINER_COLLECTION').unique = False
+    enter.operator("groupmanager.edit", text="Edit", icon='OUTLINER_COLLECTION').unique = False
     controls.operator_context = 'INVOKE_DEFAULT'
     controls.operator("groupmanager.back", text="Back", icon='LOOP_BACK').steps = 1
 
@@ -268,19 +246,11 @@ def pick_controls(layout):
 
 def group_controls(layout, context, *, in_pie=False):
     pair = layout.column(align=True)
-    create_group_row(pair, context)
-    clear_controls(pair, context)
-    duplicate = layout.row(align=True)
-    duplicate.enabled = bpy.ops.groupmanager.duplicate_move.poll()
-    duplicate.operator_context = 'INVOKE_REGION_WIN'
-    duplicate.operator("groupmanager.duplicate_move", text="Duplicate", icon='DUPLICATE').kind = 'GROUP'
-    choices = duplicate.row(align=True)
-    choices.ui_units_x = 1.0
-    if in_pie:
-        choices.popover(panel="SCENA_PT_duplicate_choices", text="", icon='DOWNARROW_HLT')
-    else:
-        choices.menu("SCENA_MT_duplicate", text="")
-    members = layout.row(align=True)
+    pair.operator("groupmanager.create", text="Create Group", icon='NEWFOLDER')
+    dissolve = pair.row(align=True)
+    dissolve.operator_context = 'INVOKE_REGION_WIN'
+    dissolve.operator("groupmanager.dissolve", icon='GROUP')
+    members = layout.split(factor=0.5, align=True)
     members.operator("groupmanager.add_members", text="Add", icon='ADD')
     members.operator("groupmanager.remove_members", text="Remove", icon='REMOVE')
 
@@ -293,7 +263,6 @@ def all_group_controls(layout, context, *, in_pie=False):
         layout.popover(panel="SCENA_PT_group_operations", text="Operations", icon='MODIFIER')
     else:
         layout.menu("SCENA_MT_group_operations", text="Operations", icon='MODIFIER')
-    layout.popover(panel="GROUPMANAGER_PT_definitions", text="Group Library", icon='OUTLINER_COLLECTION')
 
 
 class SCENA_MT_duplicate(bpy.types.Menu):
@@ -310,6 +279,10 @@ class SCENA_MT_group_operations(bpy.types.Menu):
     def draw(self, context):
         layout = self.layout
         layout.operator_context = 'INVOKE_REGION_WIN'
+        for kind, label in (('GROUP', "Duplicate Group"), ('INSTANCE', "Duplicate Link"),
+                            ('NESTED', "Duplicate Group and Nested")):
+            layout.operator("groupmanager.duplicate_move", text=label, icon='DUPLICATE').kind = kind
+        layout.separator()
         select_instances_button(layout, context)
         tool_controls(layout, context)
         switch_type_buttons(layout, context)
@@ -422,6 +395,9 @@ class GROUPMANAGER_PT_current(Sidebar, bpy.types.Panel):
 
     def draw_header_preset(self, context):
         row = self.layout.row(align=True)
+        kind = creation.current_settings(context).kind
+        icon = 'GEOMETRY_NODES' if kind == 'NODES' else 'OUTLINER_COLLECTION'
+        row.operator("groupmanager.cycle_create_kind", text="", icon=icon, emboss=False)
         row.operator("groupmanager.open_preferences", text="", icon='PREFERENCES', emboss=False)
         row.separator(factor=1.5)
 
@@ -499,19 +475,6 @@ class GROUPMANAGER_PT_object_edit(ObjectProperties, bpy.types.Panel):
         switch_type_buttons(self.layout, context)
 
 
-class GROUPMANAGER_PT_definitions(bpy.types.Panel):
-    bl_idname = "GROUPMANAGER_PT_definitions"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'HEADER'
-    bl_ui_units_x = 20
-    bl_label = "Group Library"
-    bl_order = 4
-    bl_options = {'DEFAULT_CLOSED'}
-
-    def draw(self, context):
-        usage.draw_library(self.layout, context)
-
-
 class GROUPMANAGER_PT_object_tool(ObjectProperties, bpy.types.Panel):
     bl_idname = "GROUPMANAGER_PT_object_tool"
     bl_parent_id = "GROUPMANAGER_PT_object"
@@ -546,8 +509,6 @@ def _properties_panel(panel, idname, parent=None):
 GROUPMANAGER_PT_object = _properties_panel(GROUPMANAGER_PT_current, "GROUPMANAGER_PT_object")
 GROUPMANAGER_PT_object_info = _properties_panel(GROUPMANAGER_PT_info, "GROUPMANAGER_PT_object_info")
 GROUPMANAGER_PT_object_info_light = _properties_panel(GROUPMANAGER_PT_info_light, "GROUPMANAGER_PT_object_info_light", "GROUPMANAGER_PT_object_info")
-GROUPMANAGER_PT_object_manage = _properties_panel(GROUPMANAGER_PT_definitions, "GROUPMANAGER_PT_object_manage", "GROUPMANAGER_PT_object")
-GROUPMANAGER_PT_object_manage.bl_label = "Manage"
 GROUPMANAGER_PT_current.bl_order = 1
 GROUPMANAGER_PT_object.bl_order = 1
 
@@ -580,7 +541,7 @@ class GROUPMANAGER_MT_quick(bpy.types.Menu):
         south.operator_context = 'INVOKE_REGION_WIN'
         blf.size(0, context.preferences.ui_styles[0].widget.points)
         translate = bpy.app.translations.pgettext_iface
-        paired_labels = (("Group Library",), ("Create Group",), ("Operations",), ("Add", "Remove"))
+        paired_labels = (("Create Group",), ("Operations",), ("Add", "Remove"))
         south.ui_units_x = max(10, max(
             sum(blf.dimensions(0, translate(label))[0] for label in labels) / 20 + 4.7
             for labels in paired_labels))
@@ -646,16 +607,28 @@ def _header(self, context):
 
 CLASSES = (SCENA_PT_overlay_frame, SCENA_MT_group_data, SCENA_MT_duplicate, SCENA_MT_group_operations, GROUPMANAGER_PT_group_data, GROUPMANAGER_PT_current, GROUPMANAGER_PT_info,
            SCENA_PT_visibility_display, SCENA_PT_duplicate_choices, SCENA_PT_group_operations, GROUPMANAGER_PT_info_light,
-           GROUPMANAGER_PT_definitions,
            GROUPMANAGER_PT_object, GROUPMANAGER_PT_object_info,
            GROUPMANAGER_PT_object_info_light,
            GROUPMANAGER_PT_object_navigate,
            GROUPMANAGER_PT_object_edit,
-           GROUPMANAGER_PT_object_tool, GROUPMANAGER_PT_object_manage,
+           GROUPMANAGER_PT_object_tool,
            GROUPMANAGER_PT_pie_types,
            GROUPMANAGER_MT_quick,
            GROUPMANAGER_OT_toggle_viewport_hide,
            GROUPMANAGER_OT_quick)
+
+
+def _get_keep_modifiers(wm):
+    prefs = preferences.get(bpy.context)
+    return prefs.keep_modifiers if prefs is not None else wm.get("gm_keep_group_modifiers", False)
+
+
+def _set_keep_modifiers(wm, value):
+    prefs = preferences.get(bpy.context)
+    if prefs is not None:
+        prefs.keep_modifiers = value
+    else:
+        wm["gm_keep_group_modifiers"] = value
 
 
 def register():
@@ -663,7 +636,7 @@ def register():
     bpy.types.WindowManager.gm_keep_group_modifiers = BoolProperty(
         name="Keep Modifiers",
         description="When ungrouping, keep this group's modifiers on the objects inside it",
-        default=False,
+        get=_get_keep_modifiers, set=_set_keep_modifiers,
     )
     bpy.types.VIEW3D_HT_header.append(_header)
     _install_add_menu()

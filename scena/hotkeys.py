@@ -176,6 +176,7 @@ class GM_OT_open_preferences(bpy.types.Operator):
         return not bpy.app.background and __package__ in context.preferences.addons
 
     def execute(self, context):
+        context.preferences.addons[__package__].preferences.settings = 'GROUP'
         return bpy.ops.preferences.addon_show(module=__package__)
 
 

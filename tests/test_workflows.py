@@ -842,7 +842,7 @@ class GroupWorkflows(unittest.TestCase):
         shared_inner = next(obj for obj in hosts.definition(shared).objects if hosts.definition(obj))
         self.assertEqual(hosts.definition(shared_inner), inner_source)
 
-    def test_member_edits_shared_and_unused_definition_can_be_placed_again(self):
+    def test_shared_member_edits_and_unused_definition_survive_library_removal(self):
         group = create_group([flat_part("surface")], "Table")
         source = hosts.definition(group)
         select([group])
@@ -864,9 +864,12 @@ class GroupWorkflows(unittest.TestCase):
         bpy.context.view_layer.update()
         self.assertEqual(count_uses(source), 0)
         self.assertTrue(source.use_fake_user)
-        self.assertEqual(bpy.ops.groupmanager.place_existing(definition_name=source.name, kind="NODES"), {"FINISHED"})
-        self.assertEqual(hosts.definition(bpy.context.active_object), source)
-        self.assertEqual(realized_parts(), Counter({("surface", 0): 1}))
+        self.assertIn(source.name, bpy.data.collections)
+        for panel in ('GROUPMANAGER_PT_definitions', 'GROUPMANAGER_PT_object_manage'):
+            self.assertFalse(hasattr(bpy.types, panel))
+        self.assertFalse(hasattr(bpy.types.WindowManager, 'gm_library_query'))
+        for operator in ('place_existing', 'cleanup_unused'):
+            self.assertNotIn(operator, dir(bpy.ops.groupmanager))
 
     def test_pick_object_selects_member_through_nested_groups(self):
         panel = flat_part("panel")

@@ -51,6 +51,13 @@ def _redraw_viewports(self, context):
                 area.tag_redraw()
 
 
+def _update_kind(self, context):
+    scene = context.scene
+    if scene and hasattr(scene, "gm_create_settings"):
+        scene.gm_create_settings.property_unset("kind")
+    _redraw_viewports(self, context)
+
+
 def _update_cursor_origin(self, context):
     hotkeys.set_cursor_enabled(self.use_cursor_origin)
 
@@ -76,8 +83,12 @@ class GROUPMANAGER_Preferences(bpy.types.AddonPreferences):
     default_group_name: StringProperty(name="Group Name",
                                        description="Default collection name. Leave empty to use the active object's name. Scena adds a Group_ prefix",
                                        default="")
-    default_kind: EnumProperty(name="Group Type", items=creation.KINDS, default=creation.DEFAULT_KIND,
-                               update=_redraw_viewports)
+    default_kind: EnumProperty(name="Group Type", items=[(key, label, tip, number)
+                                     for key, label, tip, icon, number in creation.KINDS],
+                               default=creation.DEFAULT_KIND, update=_update_kind)
+    keep_modifiers: BoolProperty(name="Keep Modifiers",
+                                 description="When ungrouping, keep this group's modifiers on the objects inside it",
+                                 default=False, update=_redraw_viewports)
     default_pivot: EnumProperty(name="Origin", items=creation.PIVOTS, default='ACTIVE',
                                 update=_redraw_viewports)
     default_orientation: EnumProperty(name="Local Axes", items=creation.ORIENTATIONS,
@@ -169,6 +180,10 @@ class GROUPMANAGER_Preferences(bpy.types.AddonPreferences):
         fields.prop(self, "default_pivot")
         fields.prop(self, "default_orientation")
         fields.prop(self, "default_include_children")
+
+        ungroup = layout.box()
+        ungroup.label(text="Ungroup")
+        ungroup.prop(self, "keep_modifiers")
 
         navigation = layout.box()
         navigation.label(text="Navigate", icon='VIEW3D')

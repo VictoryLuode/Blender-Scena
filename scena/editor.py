@@ -2326,7 +2326,7 @@ def _draw_frame_name(layout, host, name, tint, flat_min_x, flat_max_y, buttons):
 
 class GM_OT_edit(bpy.types.Operator):
     bl_idname = "groupmanager.edit"
-    bl_label = "Edit Group"
+    bl_label = "Edit"
     bl_description = ("Edit the selected groups in place. The last selected group stays active, "
                       "and Add puts objects into that group")
     bl_options = {'REGISTER', 'UNDO'}

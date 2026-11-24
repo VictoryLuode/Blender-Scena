@@ -564,71 +564,9 @@ class GM_OT_Usages(bpy.types.Operator):
                 button.offset = offset
 
 
-def _unused():
-    result = []
-    for col in bpy.data.collections:
-        if (hosts.is_definition(col) and not col.library and not col.override_library
-                and not col.asset_data and col.users == int(col.use_fake_user) and not counts(col)):
-            result.append(col)
-    return result
-
-
-class GM_OT_CleanupUnused(bpy.types.Operator):
-    bl_idname = "groupmanager.cleanup_unused"
-    bl_label = "Remove Unused Definitions"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    def invoke(self, context, event):
-        invalidate()
-        self._approved = {c.session_uid for c in _unused()}
-        if not self._approved:
-            self.report({'INFO'}, "No local definitions to remove")
-            return {'CANCELLED'}
-        return context.window_manager.invoke_props_dialog(self, width=400)
-
-    def draw(self, context):
-        self.layout.label(text="Remove these unused definitions that have no other data-block users")
-        for col in _unused():
-            if col.session_uid in getattr(self, "_approved", set()):
-                self.layout.label(text=col.name, icon='OUTLINER_COLLECTION')
-
-    def execute(self, context):
-        invalidate()
-        candidates = _unused()
-        approved = getattr(self, "_approved", None)
-        if approved is not None:
-            candidates = [col for col in candidates if col.session_uid in approved]
-        for col in candidates:
-            bpy.data.collections.remove(col)
-        invalidate()
-        self.report({'INFO'}, f"Removed {len(candidates)} definitions")
-        return {'FINISHED'}
-
-
-def draw_library(layout, context):
-    layout.prop(context.window_manager, "gm_library_query", text="", icon='VIEWZOOM')
-    query = context.window_manager.gm_library_query.strip().casefold()
-    matches = [col for col in _data().definitions if query in col.name.casefold()]
-    for col in matches[:30]:
-        row = layout.row(align=True)
-        row.label(text=col.name_full, icon='LIBRARY_DATA_DIRECT' if col.library else 'OUTLINER_COLLECTION')
-        uses = row.operator("groupmanager.usages", text=f"{sum(counts(col).values())} uses")
-        uses.definition_uid = str(col.session_uid)
-        place = row.operator("groupmanager.place_existing", text="", icon='ADD')
-        place.definition_name = col.name
-        if hasattr(place, 'definition_uid'):
-            place.definition_uid = str(col.session_uid)
-    if len(matches) > 30:
-        layout.label(text=f"{len(matches)} definitions. Type a name to narrow the list")
-    elif not matches:
-        layout.label(text="No matching group definitions" if query else "No group definitions yet")
-    layout.separator()
-    layout.operator("groupmanager.cleanup_unused", icon='TRASH')
-
-
 CLASSES = (GM_OT_SelectSimilar, GM_OT_select_grouped_kind, GM_OT_select_linked_group,
            GROUPMANAGER_MT_select_grouped, GROUPMANAGER_MT_select_linked,
-           GM_OT_Locate, GM_OT_Usages, GM_OT_CleanupUnused)
+           GM_OT_Locate, GM_OT_Usages)
 
 
 def _hook_if_live():
@@ -643,7 +581,6 @@ def register():
     _hook_selection_menus()
     if not bpy.app.timers.is_registered(_hook_if_live):
         bpy.app.timers.register(_hook_if_live, first_interval=1.0)
-    bpy.types.WindowManager.gm_library_query = StringProperty(name="Search Definitions", options={'SKIP_SAVE'})
     for key in ("load_pre", "undo_pre", "redo_pre", "load_post", "undo_post", "redo_post"):
         handlers = getattr(bpy.app.handlers, key)
         if _reset not in handlers:
@@ -663,6 +600,4 @@ def unregister():
             handlers.remove(_reset)
     if _on_update in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(_on_update)
-    if hasattr(bpy.types.WindowManager, "gm_library_query"):
-        del bpy.types.WindowManager.gm_library_query
     invalidate()

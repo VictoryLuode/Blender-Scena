@@ -7,11 +7,11 @@
 - In Object Mode, use **Shift+A → Group** to group the selected objects. With an empty selection, it makes an empty group at the 3D Cursor. Scena stores the group definition in a separate collection.
 - The **Create Group** button has a type switch for collection instances and Geometry Nodes groups. Leave the name blank to use the active object's name. To convert existing groups, select them and use **Operations → Switch to Geometry Nodes** or **Switch to Collection**. Already matching groups and regular objects are skipped.
 - Select a group and open **Object Properties → Group Data** to rename the definition, switch to a different definition, or inspect where it is used. **Make Group Unique** gives this placement its own group definition while keeping member meshes shared.
-- Press **E → Edit Group** to edit at the selected placement. You can also select multiple placements before entering. Hidden instances stay hidden, and instances excluded from the View Layer do not prevent entering. Choose **Edit Child Group** to go deeper. **Back** goes up one level, and Shift-clicking **Back** returns directly to the scene.
+- Choose **Edit** to edit at the selected placement. You can also select multiple placements before entering. Hidden instances stay hidden, and instances excluded from the View Layer do not prevent entering. Choose **Edit Child Group** to go deeper. **Back** goes up one level, and Shift-clicking **Back** returns directly to the scene.
 
 ## Duplicate and make variants
 
-The **Duplicate** button performs the same action as **Shift+D**. Its dropdown offers three sharing levels.
+Open **Operations** and choose **Duplicate Link**, **Duplicate Group**, or **Duplicate Group and Nested**. The keyboard shortcuts below use the same sharing levels.
 
 | Mode | Default shortcut | What the copy shares |
 | --- | --- | --- |
@@ -33,7 +33,7 @@ For an existing placement, choose **F3 → Make Single User**. **Group** makes t
 
 - **Ungroup** expands one level. Hold **Shift** to expand every nested level. The wrench beside the button toggles **Keep Modifiers**. Use **Add** and **Remove** to change membership. **Operations** also contains **Split Mirror** and the group type conversions.
 - Use **Object → Set Origin** or the viewport context menu to place a group origin at its geometry center, the 3D Cursor, its surface center of mass, or its volume center of mass. Scena compensates for repositioning across linked placements. **Geometry to Origin** moves the shared geometry and is visible in every placement.
-- Open **Group Library** in the sidebar or pie menu to search definitions, inspect usage across scenes, and locate nested placements. Click **+** to place at the 3D Cursor. **Remove Unused Definitions** cleans up definitions with no placements or other data-block references.
+
 
 ## Use modifiers
 

@@ -1,63 +1,21 @@
 # Scena
 
-**Edit one. Update every linked instance.**
+Build a room with linked groups in Blender. Add a brace to one desk frame and every linked desk gets the same brace. Each workstation keeps its own monitor and chair.
 
-Scena is a Blender extension for editing shared object groups in place.
-
-[![Scena in the Blender viewport. A blue outline marks the group being edited, beside its two linked instances.](docs/scena-cover.jpg)](docs/media/scena-showcase.mp4)
-
-[**Download Scena 0.3.1**](https://github.com/VictoryLuode/Blender-Scena/releases/download/v0.3.1/Scena-0.3.1.zip) · [Showcase video (1080p)](docs/media/scena-showcase.mp4) · [Quick start](#quick-start) · [User guide](docs/user-guide.md)
-
-Requires **Blender 5.3.0 or later**. Tested in Blender 5.3.0.
-
-## See Scena in action
-
-### Edit linked instances in place
-
-Edit the tabletop in one workstation and watch every linked copy update in the viewport.
-
-![The active workstation's tabletop rises together with both linked copies.](docs/media/scena-shared-edit.gif)
-
-### Make a single-user variant
-
-Use **Make Single User → Group and Data**, then change the right workstation independently.
-
-![Only the right workstation's tabletop rises.](docs/media/scena-unique-variant.gif)
-
-### Edit a nested group
-
-Open a child group to adjust the display assembly directly inside the workstation.
-
-![The display assemblies rise together while the workstations stay put.](docs/media/scena-nested-edit.gif)
-
-### Place a group from the Group Library
-
-Choose an existing definition and place a new linked instance at the 3D Cursor.
-
-![A second workstation appears at the 3D Cursor after choosing the group definition.](docs/media/scena-group-library.gif)
+[Watch the 1080p proof-room walkthrough](docs/media/proof-room.mp4) · [User guide](docs/user-guide.md) · [Published releases](https://github.com/VictoryLuode/Blender-Scena/releases)
 
 ## Install
 
-1. Download [`Scena-0.3.1.zip`](https://github.com/VictoryLuode/Blender-Scena/releases/download/v0.3.1/Scena-0.3.1.zip) from Releases.
-2. In Blender, open **Edit → Preferences → Get Extensions**. Open the dropdown in the upper right and choose **Install from Disk…**.
-3. Select the ZIP file. In the 3D Viewport, press **N** and open **Item → Group**. In Object Mode, press **E** to open the Scena pie menu.
+In Blender 5.3, open **Edit → Preferences → Get Extensions**. Choose **Install from Disk…** from the dropdown and select the Scena extension ZIP.
 
 ## Quick start
 
-| Step | In the 3D Viewport |
-| --- | --- |
-| **1. Group the objects** | Select the parts of a workstation, then choose **Group → Create Group** in the sidebar. |
-| **2. Place a linked copy** | Select the group, press **Alt+D**, and move the new instance. |
-| **3. Edit either copy** | Press **E → Edit Group** and move the tabletop or edit its mesh. The other instance updates as you work. Choose **E → Back** to exit. |
+1. Select the desktop and legs. Press **E** and choose **Create Group**.
+2. Select the desk, choose **Operations → Duplicate Link** or press **Alt+D**, then move the copy into place.
+3. Select a brace and the original desk group. Use **Add** to fit the same brace to each linked desk.
 
-Press **Shift+D** to copy the top-level group definition while keeping nested groups and member meshes shared. To make an existing placement independent at a specific level, use **F3 → Make Single User**. See [Duplicate and make variants](docs/user-guide.md#duplicate-and-make-variants) for the exact sharing rules.
-
-## Further reading
-
-- [User guide](docs/user-guide.md) covers group types, nested editing, picking, the Group Library, modifier stacks, and preferences.
-- [Performance and testing](docs/user-guide.md#performance-and-testing) documents the 1,000-instance benchmark and the tested workflows.
-- [Report an issue](https://github.com/VictoryLuode/Blender-Scena/issues) with your Blender version and steps to reproduce it.
+For a separately editable copy, use **Operations → Duplicate Group**. See the [sharing rules](docs/user-guide.md#duplicate-and-make-variants) before editing member meshes.
 
 ## License and credits
 
-Scena is licensed under the [GNU General Public License v3.0 or later](scena/LICENSE). The bundled viewport icon font uses artwork by Blender contributors, derived from Blender’s [SVG interface icons](https://github.com/blender/blender/tree/02f0899d78e3/release/datafiles/icons_svg).
+Scena uses the [GNU General Public License v3.0 or later](scena/LICENSE). Its bundled icon font uses artwork derived from [Blender's interface icons](https://github.com/blender/blender/tree/02f0899d78e3/release/datafiles/icons_svg).
