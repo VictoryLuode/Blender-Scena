@@ -20,7 +20,7 @@ def _geometry_center(context, source, operation, center):
     probe = hosts.make_host("Scena Origin Measurement", source, 'NODES')
     try:
         context.scene.collection.objects.link(probe)
-        hosts._socket(hosts._source_modifier(probe), hosts.REALIZE_SOCKET).value = "Mesh"
+        hosts._socket(hosts._source_modifier(probe), hosts.REALIZE_SOCKET).value = True
         probe.update_tag()
         graph = context.evaluated_depsgraph_get()
         mesh = bpy.data.meshes.new_from_object(probe.evaluated_get(graph), depsgraph=graph)

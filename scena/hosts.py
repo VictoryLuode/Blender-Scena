@@ -10,7 +10,7 @@ DEFINITION_PREFIX = "Group_"
 GRAPH_NAME = "Scena Group"
 MODIFIER_NAME = "Scena Group"
 SOURCE_NAME = "Source"
-OUTPUT_NAME = "Output"
+OUTPUT_NAME = "Convert to Mesh"
 GEOMETRY_NAME = "Geometry"
 _NODE_NAMES = {
     "NodeGroupInput": "Group Inputs",
@@ -109,46 +109,43 @@ def host_type(obj):
     return 'NATIVE' if obj.type == 'EMPTY' else 'NODES'
 
 
-def _output_menu(tree):
-    node = tree.nodes.new('GeometryNodeMenuSwitch')
-    node.data_type = 'GEOMETRY'
-    node.enum_items[0].name = "Instance"
-    node.enum_items[1].name = "Mesh"
+def _output_switch(tree):
+    node = tree.nodes.new('GeometryNodeSwitch')
+    node.input_type = 'GEOMETRY'
     return node
 
 
 def _upgrade_output(tree):
     identifier = tree[REALIZE_SOCKET]
     item = tree.interface.items_tree[identifier]
-    if item.socket_type != 'NodeSocketBool':
+    if item.name != OUTPUT_NAME:
+        item.name = OUTPUT_NAME
+    if item.socket_type != 'NodeSocketMenu':
         return
     inputs = next(n for n in tree.nodes if n.type == 'GROUP_INPUT')
     old = next((link.to_node for link in inputs.outputs[identifier].links
-                if link.to_node.type == 'SWITCH' and link.to_node.input_type == 'GEOMETRY'), None)
-    if not old or not all(old.inputs[key].is_linked for key in ('False', 'True')):
+                if link.to_node.type == 'MENU_SWITCH'), None)
+    if not old or not all(old.inputs[key].is_linked for key in ('Instance', 'Mesh')):
         return
-    # Changing the socket type keeps animation paths but resets modifier values.
     mesh_outputs = [mod for obj in bpy.data.user_map(subset={tree}).get(tree, ())
                     if isinstance(obj, bpy.types.Object) and not obj.library
                     for mod in obj.modifiers if mod.type == 'NODES' and mod.node_group == tree
-                    and _socket(mod, REALIZE_SOCKET).value]
-    menu = _output_menu(tree)
-    menu.parent = old.parent
-    menu.location, menu.width, menu.label = old.location.copy(), old.width, old.label
+                    and _mesh_output(mod)]
+    switch = _output_switch(tree)
+    switch.parent = old.parent
+    switch.location, switch.width, switch.label = old.location.copy(), old.width, old.label
     name = old.name
-    for key, mode in [('False', 'Instance'), ('True', 'Mesh')]:
-        tree.links.new(old.inputs[key].links[0].from_socket, menu.inputs[mode])
+    for src, dst in [('Instance', 'False'), ('Mesh', 'True')]:
+        tree.links.new(old.inputs[src].links[0].from_socket, switch.inputs[dst])
     for link in list(old.outputs[0].links):
-        tree.links.new(menu.outputs[0], link.to_socket)
+        tree.links.new(switch.outputs[0], link.to_socket)
     tree.nodes.remove(old)
-    menu.name = name
-    item.name = OUTPUT_NAME
-    item.description = "Choose shared instances or mesh geometry for this Group"
-    item.socket_type = 'NodeSocketMenu'
-    tree.links.new(inputs.outputs[identifier], menu.inputs['Menu'])
+    switch.name = name
+    item.socket_type = 'NodeSocketBool'
+    tree.links.new(inputs.outputs[identifier], switch.inputs['Switch'])
     tree.interface_update(bpy.context)
     for mod in mesh_outputs:
-        _socket(mod, REALIZE_SOCKET).value = "Mesh"
+        _socket(mod, REALIZE_SOCKET).value = True
 
 
 def _name_graph(tree):
@@ -238,13 +235,13 @@ def _placement_graph():
         tree.is_modifier = True
         tree.interface.new_socket(name=GEOMETRY_NAME, in_out='OUTPUT', socket_type='NodeSocketGeometry')
         source = tree.interface.new_socket(name=SOURCE_NAME, in_out='INPUT', socket_type='NodeSocketCollection')
-        realize = tree.interface.new_socket(name=OUTPUT_NAME, in_out='INPUT', socket_type='NodeSocketMenu')
+        realize = tree.interface.new_socket(name=OUTPUT_NAME, in_out='INPUT', socket_type='NodeSocketBool')
         tree[SOURCE_SOCKET] = source.identifier
         tree[REALIZE_SOCKET] = realize.identifier
         inputs = tree.nodes.new('NodeGroupInput')
         collection = tree.nodes.new('GeometryNodeCollectionInfo')
         realization = tree.nodes.new('GeometryNodeRealizeInstances')
-        switch = _output_menu(tree)
+        switch = _output_switch(tree)
         output = tree.nodes.new('NodeGroupOutput')
         inputs.location = (-530, 80)
         collection.location = (-300, 100)
@@ -252,10 +249,10 @@ def _placement_graph():
         switch.location = (180, 100)
         output.location = (420, 100)
         tree.links.new(inputs.outputs[source.name], collection.inputs['Collection'])
-        tree.links.new(inputs.outputs[realize.identifier], switch.inputs['Menu'])
+        tree.links.new(inputs.outputs[realize.identifier], switch.inputs['Switch'])
         tree.links.new(collection.outputs['Instances'], realization.inputs['Geometry'])
-        tree.links.new(collection.outputs['Instances'], switch.inputs['Instance'])
-        tree.links.new(realization.outputs['Geometry'], switch.inputs['Mesh'])
+        tree.links.new(collection.outputs['Instances'], switch.inputs['False'])
+        tree.links.new(realization.outputs['Geometry'], switch.inputs['True'])
         tree.links.new(switch.outputs[0], output.inputs[GEOMETRY_NAME])
         tree[GRAPH_KEY] = 1
         _name_graph(tree)

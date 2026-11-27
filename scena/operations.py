@@ -185,6 +185,36 @@ class GROUPMANAGER_OT_realize(PlacementAction, bpy.types.Operator):
         edit_placement(context, obj, self.local, lambda place: hosts.set_realize(place, self.enabled))
 
 
+class GROUPMANAGER_OT_prepare_hard_ops(PlacementAction, bpy.types.Operator):
+    bl_idname = "groupmanager.prepare_hard_ops"
+    bl_label = "Prepare for Hard Ops"
+    bl_description = "Give the active placement mesh output for Hard Ops modifiers while keeping its shared source"
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return (super().poll(context) and obj.is_editable and not obj.override_library
+                and editor.in_scope(context, obj) and not editor.host_is_open(obj))
+
+    def apply(self, context):
+        obj = context.active_object
+        if hosts.get_realize(obj):
+            return
+        hosts.check_switch(obj, 'NODES')
+        unsupported = hosts._non_mesh_member(hosts.definition(obj))
+        if unsupported:
+            raise ValueError(f"{unsupported.name} ({unsupported.type}) needs instance output")
+
+        def prepare(place):
+            if hosts.host_type(place) != 'NODES':
+                place = hosts.switch_host(place, 'NODES')
+            hosts.set_realize(place, True)
+            return place
+
+        result = edit_placement(context, obj, True, prepare)
+        creation.select_result(context, result)
+
+
 class GROUPMANAGER_OT_make_single_user(PlacementAction, bpy.types.Operator):
     bl_idname = "groupmanager.make_single_user"
     bl_label = "Make Single User"
@@ -399,7 +429,7 @@ class GROUPMANAGER_OT_delete_group(PlacementAction, bpy.types.Operator):
 
 CLASSES = (
     GROUPMANAGER_OT_switch_type, GROUPMANAGER_OT_choose_data, GROUPMANAGER_OT_realize,
-    GROUPMANAGER_OT_make_single_user, GROUPMANAGER_OT_fork, GROUPMANAGER_OT_dissolve,
+    GROUPMANAGER_OT_prepare_hard_ops, GROUPMANAGER_OT_make_single_user, GROUPMANAGER_OT_fork, GROUPMANAGER_OT_dissolve,
     GROUPMANAGER_OT_force_ungroup, GROUPMANAGER_OT_delete_group,
     GROUPMANAGER_OT_instance_mirror, GROUPMANAGER_OT_split_mirror,
 )

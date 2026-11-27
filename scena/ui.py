@@ -285,6 +285,7 @@ class SCENA_MT_group_operations(bpy.types.Menu):
         layout.separator()
         select_instances_button(layout, context)
         tool_controls(layout, context)
+        layout.operator("groupmanager.prepare_hard_ops", icon='MODIFIER')
         switch_type_buttons(layout, context)
 
 
