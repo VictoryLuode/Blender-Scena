@@ -3,7 +3,11 @@
 
 <p align="center"><a href="docs/media/proof-room.mp4"><img src="docs/media/proof-room-cover.jpg" width="100%" alt="Three workstations sharing desk frames and display boards in the proof room"></a></p>
 <p align="center"><a href="docs/media/proof-room.mp4"><strong>▶ Watch the build · 1:05</strong></a></p>
-<p align="center">Blender 5.3 · Open source · GPL-3.0-or-later</p>
+<p align="center">
+  <a href="#install"><img src="docs/badges/blender.svg" alt="Blender 5.3"></a>
+  <a href="https://github.com/VictoryLuode/Blender-Scena/releases"><img src="docs/badges/release.svg" alt="Download Release"></a>
+  <a href="scena/LICENSE"><img src="docs/badges/license.svg" alt="License GPL-3.0+"></a>
+</p>
 <p align="center"><a href="#quick-start">Quick start</a> · <a href="#install">Install</a> · <a href="#hard-ops-on-the-main-branch">Hard Ops</a> · <a href="docs/user-guide.md">User guide</a></p>
 
 ## Quick start
