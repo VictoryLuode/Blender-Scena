@@ -25,7 +25,7 @@
 - **Linked groups.** Build a desk, workstation, or modular assembly once and place copies throughout a scene. Move a member or edit its mesh in any linked placement to update the shared group.
 - **In-place editing.** Enter a group at its current position in the scene. Step into nested groups, select members in the viewport, and use the scene around them as a reference.
 - **Independent variants.** Duplicate the top-level group or its nested definitions. Use **Make Single User** when a placement also needs independent mesh data or materials.
-- **Collection and Geometry Nodes groups.** Choose either representation and switch between them while keeping the same source collection. Geometry Nodes groups can output instances or evaluated meshes for Blender and Hard Ops modifiers.
+- **Collection and Geometry Nodes groups.** Choose either representation and switch between them while keeping the same source collection.
 
 ## Install
 
@@ -65,11 +65,11 @@ Move the desktop in an independent workstation group. The other two desktops sta
 
 ![Only the rightmost desktop moves after its workstation group is made independent](docs/media/scena-unique-variant.gif)
 
-## Modifiers and Hard Ops
+## Modifiers
 
 On a Geometry Nodes group, open the **Scena Group** modifier and use **Convert to Mesh** to control what subsequent modifiers receive. Leave it off to output linked instances or turn it on to output an evaluated mesh. Scena preserves the output mode when opening older groups.
 
-With Hard Ops enabled, make the Scena group active and use **Solidify**, **Array**, or **Difference** from the **Q** menu. Scena prepares mesh output for the active placement and keeps it linked to its source. For **Difference**, select the cutter first and the group last. [Modifier guide](docs/user-guide.md#use-modifiers)
+Scena supports Hard Ops. [Modifier guide](docs/user-guide.md#use-modifiers)
 
 ## Support and license
 
