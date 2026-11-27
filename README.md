@@ -1,39 +1,57 @@
 <h1 align="center">Scena</h1>
-<p align="center"><strong>Linked groups for Blender set builders</strong></p>
 
-<p align="center"><a href="docs/media/proof-room.mp4"><img src="docs/media/proof-room-cover.jpg" width="100%" alt="Three workstations sharing desk frames and display boards in the proof room"></a></p>
-<p align="center"><a href="docs/media/proof-room.mp4"><strong>▶ Watch the build · 1:05</strong></a></p>
+<p align="center"><strong>Linked group editing for Blender</strong></p>
+
+<p align="center">Build reusable groups from scene objects, edit them in place, and keep linked copies in sync.</p>
+
+<p align="center">
+  <a href="https://github.com/VictoryLuode/Blender-Scena/releases/latest"><strong>Download Scena</strong></a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="docs/user-guide.md">User guide</a>
+</p>
+
 <p align="center">
   <a href="#install"><img src="docs/badges/blender.svg" alt="Blender 5.3"></a>
-  <a href="https://github.com/VictoryLuode/Blender-Scena/releases"><img src="docs/badges/release.svg" alt="Download Release"></a>
-  <a href="scena/LICENSE"><img src="docs/badges/license.svg" alt="License GPL-3.0+"></a>
+  <a href="scena/LICENSE"><img src="docs/badges/license.svg" alt="GPL-3.0 or later"></a>
 </p>
-<p align="center"><a href="#quick-start">Quick start</a> · <a href="#install">Install</a> · <a href="#hard-ops">Hard Ops</a> · <a href="docs/user-guide.md">User guide</a></p>
 
-## Quick start
+<p align="center"><a href="docs/media/proof-room.mp4"><img src="docs/media/proof-room-cover.jpg" width="100%" alt="Blender scene with three workstations built from linked desks and display boards"></a></p>
 
-Recreate the first row of desks from the walkthrough in Blender 5.3.
+<p align="center"><a href="docs/media/proof-room.mp4">Watch the workstation demo · 1:05</a></p>
 
-1. **Build the frame.** Select the desktop and legs. Press **E** over the selection and choose **Create Group**.
-2. **Place a second desk.** Select the group and choose **Operations → Duplicate Link** (or press **Alt+D**). Move the copy to the next workstation.
-3. **Brace both desks.** Select a brace and the original group, then choose **Add**. Look at the second desk to see the matching brace.
+## Features
 
-### Hang the display boards
-
-![A linked board moving into place along the wall in Blender](docs/media/board-placement.webp)
-
-The boards use the same workflow as the desks. Duplicate the frame for each station, then add a ledge to one frame to fit all three. Keep the prints outside the group so you can swap one independently. For a separately editable group, choose **Operations → Duplicate Group**. [See the sharing rules](docs/user-guide.md#duplicate-and-make-variants).
+- **Linked groups.** Build a desk, workstation, or modular assembly once and place copies throughout a scene. Move a member or edit its mesh in any linked placement to update the shared group.
+- **In-place editing.** Enter a group at its current position in the scene. Step into nested groups, select members in the viewport, and use the scene around them as a reference.
+- **Independent variants.** Duplicate the top-level group or its nested definitions. Use **Make Single User** when a placement also needs independent mesh data or materials.
+- **Collection and Geometry Nodes groups.** Choose either representation and switch between them while keeping the same source collection. Geometry Nodes groups can output instances or evaluated meshes for Blender and Hard Ops modifiers.
 
 ## Install
 
-Download [Scena 0.3.2](https://github.com/VictoryLuode/Blender-Scena/releases/tag/v0.3.2). In Blender 5.3, open **Edit → Preferences → Get Extensions**, open the dropdown, choose **Install from Disk…** and select the ZIP.
+**Requires Blender 5.3.**
 
-## Hard Ops
+1. Download the Scena extension ZIP. [Latest release](https://github.com/VictoryLuode/Blender-Scena/releases/latest)
+2. In Blender, open **Edit → Preferences → Get Extensions**.
+3. Open the top-right menu, choose **Install from Disk…**, and select the ZIP. Enable **Scena** if Blender leaves it disabled.
 
-Enable Hard Ops and make a closed, editable Scena group the active object. Open the **Q** menu for **Solidify** or **Array**. For **Difference**, select the mesh cutter first and the group last.
+## Quick start
 
-These commands prepare mesh output for the active placement and preserve its shared source. To do this manually, choose **Prepare for Hard Ops**. On Geometry Nodes placements, **Convert to Mesh** selects mesh geometry when on and instances when off. Leave it off for groups whose members require instance output. Existing files keep their previous output mode when opened.
+Open **Item → Group** in the 3D Viewport sidebar or press **E** in Object Mode to open the Scena pie menu.
 
-## License and credits
+1. Select the objects that make up an assembly and choose **Create Group**.
+2. Select the group, press **Alt+D** or choose **Operations → Duplicate Link**, and move the copy into place.
+3. Select either placement and choose **Edit**. Move a member, then choose **Back**. Both placements reflect the change.
 
-Scena uses the [GNU General Public License v3.0 or later](scena/LICENSE). Its bundled icon font uses artwork derived from [Blender’s interface icons](https://github.com/blender/blender/tree/02f0899d78e3/release/datafiles/icons_svg).
+See which data each duplication mode shares. [Duplicate and make variants](docs/user-guide.md#duplicate-and-make-variants)
+
+## Modifiers and Hard Ops
+
+On a Geometry Nodes group, open the **Scena Group** modifier and use **Convert to Mesh** to control what subsequent modifiers receive. Leave it off to output linked instances or turn it on to output an evaluated mesh. Scena preserves the output mode when opening older groups.
+
+With Hard Ops enabled, make the Scena group active and use **Solidify**, **Array**, or **Difference** from the **Q** menu. Scena prepares mesh output for the active placement and keeps it linked to its source. For **Difference**, select the cutter first and the group last. [Modifier guide](docs/user-guide.md#use-modifiers)
+
+## Support and license
+
+Include your Blender and Scena versions and the steps to reproduce the issue when filing a bug report. [GitHub Issues](https://github.com/VictoryLuode/Blender-Scena/issues)
+
+Scena is licensed under the GNU General Public License v3.0 or later. Its bundled icon font uses artwork derived from Blender’s interface icons. [License](scena/LICENSE) · [Blender icon artwork](https://github.com/blender/blender/tree/02f0899d78e3/release/datafiles/icons_svg)
