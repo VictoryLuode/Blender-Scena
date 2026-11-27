@@ -7,6 +7,7 @@
 <p align="center">
   <a href="https://github.com/VictoryLuode/Blender-Scena/releases/latest"><strong>Download Scena</strong></a> ·
   <a href="#quick-start">Quick start</a> ·
+  <a href="#feature-demos">Feature demos</a> ·
   <a href="docs/user-guide.md">User guide</a>
 </p>
 
@@ -43,6 +44,26 @@ Open **Item → Group** in the 3D Viewport sidebar or press **E** in Object Mode
 3. Select either placement and choose **Edit**. Move a member, then choose **Back**. Both placements reflect the change.
 
 See which data each duplication mode shares. [Duplicate and make variants](docs/user-guide.md#duplicate-and-make-variants)
+
+## Feature demos
+
+### Shared editing
+
+Move the desktop on the left. The two linked workstations update as you edit.
+
+![The desktop moves in all three linked workstations while only the left group is open for editing](docs/media/scena-shared-edit.gif)
+
+### Nested groups
+
+Edit the display inside the workstation's nested group, then return to the parent group.
+
+![The display moves inside the nested group, the linked displays follow, and the edit returns to the workstation group](docs/media/scena-nested-edit.gif)
+
+### Independent variants
+
+Move the desktop in an independent workstation group. The other two desktops stay in place.
+
+![Only the rightmost desktop moves after its workstation group is made independent](docs/media/scena-unique-variant.gif)
 
 ## Modifiers and Hard Ops
 
