@@ -64,6 +64,9 @@ def run():
     key('E')
     yield
     assert len(draws) == count, "E opened the group menu in Edit Mode"
+    key('ESC')
+    yield
+    toolbar = area.spaces.active.show_region_toolbar
     key('T')
     yield
     assert len(draws) == count, "T opened the group menu in Edit Mode"

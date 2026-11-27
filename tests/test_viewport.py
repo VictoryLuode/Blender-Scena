@@ -218,8 +218,10 @@ def _workflow():
     window.scene.collection.objects.link(peer)
     peer.location.x = 4
     window.view_layer.update()
+    _select(placement)
     _operator("switch_type", kind="NODES", local=True)
     assert hosts.host_type(bpy.data.objects["Chair 01"]) == 'NODES'
+    assert hosts.host_type(peer) == 'NATIVE'
     assert hosts.definition(bpy.data.objects["Chair 01"]) == hosts.definition(peer)
     _operator("realize", enabled=True)
     bpy.ops.ed.undo()

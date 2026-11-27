@@ -37,12 +37,12 @@ For an existing placement, choose **F3 → Make Single User**. **Group** makes t
 
 ## Use modifiers
 
-For Geometry Nodes groups, **Scena Group → Output** determines what Blender's modifiers receive.
+For Geometry Nodes groups, **Scena Group → Convert to Mesh** determines what Blender's modifiers receive. Existing files keep their previous output mode when opened.
 
-| Output | Modifier behavior |
+| Convert to Mesh | Modifier behavior |
 | --- | --- |
-| **Instance** | Native **Mirror** and **Array** can place linked copies of the whole group. Mirror respects its axes and reference object. Array respects count and offset. Multiple consecutive Arrays can be used with one Mirror in stack order. |
-| **Mesh** | Native modifiers operate on the evaluated mesh for this placement. Mirror's Bisect and Merge settings work on the mesh. Bevel, Boolean, Solidify, Subdivision, and Displace can be added through **Add Modifier**. |
+| **Off** | Native **Mirror** and **Array** can place linked copies of the whole group. Mirror respects its axes and reference object. Array respects count and offset. Multiple consecutive Arrays can be used with one Mirror in stack order. |
+| **On** | Native modifiers operate on the evaluated mesh for this placement. Mirror's Bisect and Merge settings work on the mesh. Bevel, Boolean, Solidify, Subdivision, and Displace can be added through **Add Modifier**. |
 
 The mesh output exposes vertex group and UV names to native modifiers such as **Mask**, **Displace**, and **UV Warp**. To use **Hook**, assign weights on the source mesh, then choose the target object and vertex group in the placement's Hook modifier. Physics caches and Multires sculpting have not been verified.
 
@@ -65,6 +65,6 @@ This historical benchmark used Blender 5.3.0 in background mode on one machine. 
 
 In the same setup, group entry and exit took about **one-fifteenth of the previous time**. A separate synchronization check moved a group member and edited one mesh vertex. All 1,000 instances matched during editing and after exit.
 
-Viewport tests cover editing rotated and non-uniformly scaled nested groups, undo and redo, and reopening a scene saved during group editing. The 0.3.1 release ZIP was installed in a clean Blender 5.3.0 profile and tested after restart by creating both collection-instance and Geometry Nodes groups.
+Viewport tests cover editing rotated and non-uniformly scaled nested groups, undo and redo, and reopening a scene saved during group editing. The 0.3.2 release ZIP was installed in a clean Blender 5.3.0 profile. After restart, both group types could be created and saved preferences were restored.
 
 [Workflow tests](../tests/test_workflows.py) · [Nested edit tests](../tests/test_edit_depth.py) · [Viewport tests](../tests/test_viewport.py) · [Installation test](../tests/test_install.py)

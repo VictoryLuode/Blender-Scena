@@ -8,7 +8,7 @@
   <a href="https://github.com/VictoryLuode/Blender-Scena/releases"><img src="docs/badges/release.svg" alt="Download Release"></a>
   <a href="scena/LICENSE"><img src="docs/badges/license.svg" alt="License GPL-3.0+"></a>
 </p>
-<p align="center"><a href="#quick-start">Quick start</a> · <a href="#install">Install</a> · <a href="#hard-ops-on-the-main-branch">Hard Ops</a> · <a href="docs/user-guide.md">User guide</a></p>
+<p align="center"><a href="#quick-start">Quick start</a> · <a href="#install">Install</a> · <a href="#hard-ops">Hard Ops</a> · <a href="docs/user-guide.md">User guide</a></p>
 
 ## Quick start
 
@@ -26,13 +26,13 @@ The boards use the same workflow as the desks. Duplicate the frame for each stat
 
 ## Install
 
-Download the extension ZIP from [published releases](https://github.com/VictoryLuode/Blender-Scena/releases). In Blender 5.3, open **Edit → Preferences → Get Extensions**, open the dropdown, choose **Install from Disk…** and select the ZIP.
+Download [Scena 0.3.2](https://github.com/VictoryLuode/Blender-Scena/releases/tag/v0.3.2). In Blender 5.3, open **Edit → Preferences → Get Extensions**, open the dropdown, choose **Install from Disk…** and select the ZIP.
 
-## Hard Ops on the main branch
+## Hard Ops
 
 Enable Hard Ops and make a closed, editable Scena group the active object. Open the **Q** menu for **Solidify** or **Array**. For **Difference**, select the mesh cutter first and the group last.
 
-These commands prepare mesh output for the active placement and preserve its shared source. To do this manually, choose **Prepare for Hard Ops**. On Geometry Nodes placements, **Convert to Mesh** selects mesh geometry when on and instances when off. Leave it off for groups whose members require instance output.
+These commands prepare mesh output for the active placement and preserve its shared source. To do this manually, choose **Prepare for Hard Ops**. On Geometry Nodes placements, **Convert to Mesh** selects mesh geometry when on and instances when off. Leave it off for groups whose members require instance output. Existing files keep their previous output mode when opened.
 
 ## License and credits
 
