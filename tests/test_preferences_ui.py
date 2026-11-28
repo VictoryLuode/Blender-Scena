@@ -34,7 +34,8 @@ def run():
     if stage == "restore":
         assert prefs.default_kind == "NODES" and prefs.default_include_children
         assert prefs.default_pivot == "CURSOR" and prefs.default_orientation == "CURSOR"
-        assert not prefs.show_edit_bounds and not prefs.show_edit_header and prefs.bounds_width == 2
+        assert not prefs.show_edit_bounds and prefs.bounds_width == 2
+        assert prefs.modifier_preview.display == 'SOLID'
         assert abs(prefs.bounds_color[1] - 0.3) < 0.001
         assert (binding(context).type, binding(context).ctrl) == ("F8", 1)
         assert settings.kind == "NATIVE" and settings.pivot == "CURSOR"
@@ -76,7 +77,8 @@ def run():
 
     prefs.default_kind, prefs.default_pivot = "NODES", "CURSOR"
     prefs.default_orientation, prefs.default_include_children = "CURSOR", True
-    prefs.show_edit_bounds, prefs.show_edit_header = False, False
+    prefs.show_edit_bounds = False
+    prefs.modifier_preview.display = 'SOLID'
     prefs.bounds_color, prefs.bounds_width = (0.2, 0.3, 0.4), 2
     assert (settings.kind, settings.pivot, settings.orientation, settings.include_children) == (
         "NODES", "CURSOR", "CURSOR", True)

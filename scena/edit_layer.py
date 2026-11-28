@@ -18,6 +18,8 @@ _KEYS = (_WORK, _SHELL, _ANCHOR, _INVERSE, _HOST, _FRAME, _HIDDEN, _INITIAL, _RO
 _MIRROR = "_gm_mirror"
 _MIRROR_OF = "_gm_mirror_of"
 _PEER_HOST = "_gm_mirror_host"
+_MODIFIER_PREVIEW = "_gm_modifier_preview"
+_PREVIEW_NAME = "Group Modifier Preview"
 
 
 def is_open(source):
@@ -62,6 +64,100 @@ def _move_contents(source, destination):
         if obj.name not in destination.objects:
             destination.objects.link(obj)
         source.objects.unlink(obj)
+
+
+def _set_modifier_preview_display(preview, settings):
+    from . import hosts
+    preview.display_type = settings.display
+    modifier = preview.modifiers.get(_PREVIEW_NAME)
+    if modifier is None:
+        return
+    host = preview.get(_MODIFIER_PREVIEW)
+    entry = hosts.display_input(host, hosts.PREVIEW_SOCKET)
+    if entry is None:
+        # Older, linked placement graphs can only be upgraded in their source file.
+        modifier.show_viewport = settings.enabled
+        return
+    animation = preview.animation_data
+    if animation and animation.drivers.find(modifier.path_from_id("show_viewport")):
+        return
+    modifier.show_viewport = entry.value
+    driver = modifier.driver_add("show_viewport").driver
+    driver.type = 'AVERAGE'
+    target = driver.variables.new().targets[0]
+    target.id = host
+    target.data_path = entry.path_from_id("value")
+
+
+def update_modifier_previews(settings, context):
+    for obj in bpy.data.objects:
+        if obj.get(_MODIFIER_PREVIEW):
+            _set_modifier_preview_display(obj, settings)
+    for window in context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type in {'VIEW_3D', 'PROPERTIES', 'PREFERENCES'}:
+                area.tag_redraw()
+
+
+def refresh_open_modifier_preview(host, layer):
+    from . import hosts
+
+    source = hosts.definition(host)
+    shell = source.get(_SHELL) if source else None
+    if shell and (open_host(source) == host or any(
+            obj.get(_PEER_HOST) == host and is_helper(obj) for obj in shell.objects)):
+        show_modifier_preview(shell, layer, host)
+
+
+def show_modifier_preview(shell, layer, host):
+    """Display the modifier copies alongside the editable prototype."""
+    from . import hosts, modifier_preview, preferences
+
+    for obj in shell.objects:
+        if obj.get(_MODIFIER_PREVIEW) == host:
+            return
+    settings = preferences.preview_settings(bpy.context)
+    entry = hosts.display_input(host, hosts.PREVIEW_SOCKET)
+    enabled = entry.value if entry is not None else settings.enabled
+    if not enabled or not hosts.has_viewport_modifiers(host):
+        return
+    mesh = bpy.data.meshes.new(_PREVIEW_NAME)
+    preview = tree = None
+    try:
+        preview = bpy.data.objects.new(_PREVIEW_NAME, mesh)
+        preview[_HELPER] = True
+        preview[_MODIFIER_PREVIEW] = host
+        preview.hide_select = True
+        preview.hide_render = True
+        tree = bpy.data.node_groups.new(_PREVIEW_NAME, 'GeometryNodeTree')
+        modifier_preview.build(tree, host, hosts.definition(host))
+        preview.modifiers.new(_PREVIEW_NAME, 'NODES').node_group = tree
+        _set_modifier_preview_display(preview, settings)
+        shell.objects.link(preview)
+        for manager in bpy.data.window_managers:
+            for window in manager.windows:
+                if window.view_layer == layer:
+                    for area in window.screen.areas:
+                        if (area.type == 'VIEW_3D' and area.spaces.active.local_view
+                                and layer.objects.get(preview.name) == preview):
+                            preview.local_view_set(area.spaces.active, True)
+    except Exception:
+        bpy.data.batch_remove(ids=[item for item in (preview, mesh, tree) if item is not None])
+        raise
+
+
+def _remove_modifier_previews(shell, placement=None):
+    previews = []
+    data = set()
+    for obj in shell.objects:
+        if _MODIFIER_PREVIEW not in obj or (placement is not None and obj[_MODIFIER_PREVIEW] != placement):
+            continue
+        previews.append(obj)
+        modifier = obj.modifiers.get(_PREVIEW_NAME)
+        data.update((obj.data, modifier.node_group if modifier else None))
+    if previews:
+        bpy.data.batch_remove(ids=previews)
+        bpy.data.batch_remove(ids=[item for item in data if item is not None and not item.users])
 
 
 def _preflight(source, matrix):
@@ -175,9 +271,12 @@ def enter(scene, layer, host, source, matrix):
                 item.exclude = scene_layer != layer
         layer.update()
         host.hide_set(True, view_layer=layer)
+        show_modifier_preview(shell, layer, host)
         layer.active_layer_collection = layer.layer_collection.children[shell.name].children[work.name]
         layer.update()
     except Exception:
+        if shell is not None:
+            _remove_modifier_previews(shell)
         for obj, basis in roots.items():
             if obj.parent is not None:
                 obj.parent = None
@@ -235,8 +334,10 @@ def open_linked_peer(layer, source, host):
             copy.matrix_parent_inverse = Matrix.Identity(4)
             copy.matrix_world = placed @ inverse @ obj.matrix_world
         host.hide_set(True, view_layer=layer)
+        show_modifier_preview(shell, layer, host)
         layer.update()
     except Exception:
+        _remove_modifier_previews(shell, host)
         if allocated:
             bpy.data.batch_remove(ids=allocated)
         host.hide_set(False, view_layer=layer)
@@ -326,6 +427,8 @@ def close_linked_peers(source, layer, host=None):
     shell = source.get(_SHELL)
     if shell is None:
         return
+    if host is not None:
+        _remove_modifier_previews(shell, host)
     mirrors = []
     placements = set()
     removed_originals = set()
@@ -350,6 +453,8 @@ def close_linked_peers(source, layer, host=None):
     if mirrors:
         bpy.data.batch_remove(ids=mirrors)
     for placement in placements:
+        if host is None:
+            _remove_modifier_previews(shell, placement)
         if layer.objects.get(placement.name) == placement:
             placement.hide_set(False, view_layer=layer)
 
@@ -376,6 +481,10 @@ def leave(scene, layer, source):
     matrix = content_frame(source)
     inverse = matrix.inverted()
     hidden = bool(source.get(_HIDDEN))
+    # The depsgraph can update while the shell is being dismantled.
+    source.pop(_HOST, None)
+    if shell is not None:
+        _remove_modifier_previews(shell)
     close_linked_peers(source, layer)
     layer.update()
     roots = list(work.all_objects) if work else []

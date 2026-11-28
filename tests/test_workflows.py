@@ -6,6 +6,8 @@ import time
 import unittest
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import bpy
 from mathutils import Matrix, Vector
@@ -16,7 +18,7 @@ TEMPLATE = ROOT / "tests" / "fixtures" / "GroupManager.blend"
 sys.path.insert(0, str(ROOT))
 
 import scena
-from scena import branches, editor, edit_layer, hosts, picking, usage
+from scena import branches, editor, edit_layer, hosts, picking, preferences, usage
 
 
 def select(objects):
@@ -140,6 +142,315 @@ class GroupWorkflows(unittest.TestCase):
     def assertVectorClose(self, actual, expected, precision=4):
         for a, b in zip(actual, expected):
             self.assertAlmostEqual(a, b, places=precision)
+
+    def test_2d_fit_uses_evaluated_mesh_for_plain_group_member(self):
+        bpy.ops.mesh.primitive_monkey_add(location=(0.3, -0.1, 0.2))
+        member = bpy.context.active_object
+        member.modifiers.new('Subdivide', 'SUBSURF').levels = 3
+        member.modifiers.new('Displace', 'DISPLACE').strength = 0.4
+        host = create_group([member], 'Suzanne group', pivot='CURSOR')
+        host.rotation_euler = (0.2, 0.1, 0.5)
+        editor.open_path(bpy.context, [host])
+        evaluated = member.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        self.assertGreater(len(evaluated.data.vertices), 8192)
+        region = SimpleNamespace(width=1000, height=800)
+        projection = Matrix.Rotation(0.6, 4, 'X') @ Matrix.Rotation(-0.4, 4, 'Z')
+        projection[3] = (0.04, -0.08, 0.12, 4)
+        view = SimpleNamespace(perspective_matrix=projection)
+        # The picked occurrence of a linked member can have its own world matrix.
+        for placement in (None, Matrix.Translation((1.2, -0.5, 0)) @ evaluated.matrix_world):
+            world = evaluated.matrix_world if placement is None else placement
+            matrix = projection @ world
+            clips = [matrix @ vertex.co.to_4d() for vertex in evaluated.data.vertices]
+            xs = [(1 + p.x / p.w) * region.width / 2 for p in clips]
+            ys = [(1 + p.y / p.w) * region.height / 2 for p in clips]
+            measured = editor._extent_screen_limits(editor._frame_extent_points(member, placement), region, view)
+            self.assertVectorClose(measured, (min(xs), min(ys), max(xs), max(ys)), precision=3)
+        editor.back(bpy.context, all_levels=True)
+
+    def test_modifier_frame_follows_each_placement_and_survives_reopen(self):
+        member = flat_part('Panel', (3, 0, 0))
+        group = create_group([member], 'Panel array', 'NODES', pivot='CURSOR')
+        hosts.set_realize(group, True)
+        array = group.modifiers.new('Repeat', 'ARRAY')
+        array.use_relative_offset = False
+        array.use_constant_offset = True
+        array.constant_offset_displace = (0, 4, 0)
+        array.count = 4
+        group.modifiers.new('Reflect', 'MIRROR')
+        peer = linked_copy(group, 20)
+        bpy.context.view_layer.update()
+        self.assertIsNone(editor._modifier_frame(group))
+        option = hosts._socket(hosts._source_modifier(group), hosts.FRAME_SOCKET)
+        option.value = True
+        bpy.context.view_layer.update()
+        self.assertIsNone(editor._modifier_frame(peer))
+        corners, _ = editor._modifier_frame(group)
+        self.assertVectorClose(corners[0], (-4, -1, 0))
+        self.assertVectorClose(corners[-1], (4, 13, 0))
+        array.count = 2
+        bpy.context.view_layer.update()
+        self.assertVectorClose(editor._modifier_frame(group)[0][-1], (4, 5, 0))
+        hosts.display_input(group, hosts.PREVIEW_SOCKET).value = False
+        editor.open_path(bpy.context, [group])
+        self.assertVectorClose(editor._modifier_frame(group)[0][-1], (4, 5, 0))
+        editor.back(bpy.context, all_levels=True)
+        group_name, peer_name = group.name, peer.name
+        with tempfile.TemporaryDirectory() as folder:
+            filepath = str(Path(folder) / "Frame.blend")
+            bpy.ops.wm.save_as_mainfile(filepath=filepath)
+            bpy.ops.wm.open_mainfile(filepath=filepath)
+            group, peer = bpy.data.objects[group_name], bpy.data.objects[peer_name]
+            self.assertIsNone(editor._modifier_frame(peer))
+            self.assertVectorClose(editor._modifier_frame(group)[0][-1], (4, 5, 0))
+
+    def test_modifier_frame_measures_unrealized_nested_instances(self):
+        from scena import instance_array
+        member = flat_part('Panel', (2, 1, 0))
+        inner = create_group([member], 'Nested', 'NATIVE', pivot='CURSOR')
+        inner.rotation_euler.z = 0.45
+        group = create_group([inner], 'Nested array', 'NODES', pivot='CURSOR')
+        array = group.modifiers.new('Repeat', 'ARRAY')
+        array.use_relative_offset = False
+        array.use_constant_offset = True
+        array.constant_offset_displace = (0, 5, 0)
+        array.count = 3
+        instance_array.sync(group)
+        hosts._socket(hosts._source_modifier(group), hosts.FRAME_SOCKET).value = True
+        bpy.context.view_layer.update()
+        graph = bpy.context.evaluated_depsgraph_get()
+        self.assertEqual(len(group.evaluated_get(graph).data.vertices), 0)
+        points = [instance.matrix_world @ v.co for instance in graph.object_instances
+                  if instance.show_self and instance.object.original == member for v in instance.object.data.vertices]
+        self.assertEqual(len(points), 12)
+        corners, blocks = editor._modifier_frame(group)
+        for corner, bound in [(corners[0], min), (corners[-1], max)]:
+            self.assertVectorClose(corner, [bound(axis) for axis in zip(*points)])
+        region = SimpleNamespace(width=900, height=700)
+        projection = Matrix.Rotation(0.42, 4, 'Z')
+        projection[3] = (0.02, 0.03, 0.04, 3.5)
+        view = SimpleNamespace(perspective_matrix=projection)
+        clips = [projection @ p.to_4d() for p in points]
+        xs = [(1 + p.x / p.w) * region.width / 2 for p in clips]
+        ys = [(1 + p.y / p.w) * region.height / 2 for p in clips]
+        self.assertVectorClose(editor._extent_screen_limits(blocks, region, view), (min(xs), min(ys), max(xs), max(ys)), precision=3)
+
+    def test_imported_older_group_gains_display_settings_once(self):
+        group = create_group([flat_part('Panel')], 'Legacy', 'NODES')
+        mod = hosts._source_modifier(group)
+        tree = mod.node_group
+        for key, output in ((hosts.PREVIEW_SOCKET, "Preview Setting"), (hosts.FRAME_SOCKET, "Frame Setting")):
+            tree.interface.remove(tree.interface.items_tree[tree[key]])
+            tree.interface.remove(tree.interface.items_tree[output])
+            del tree[key]
+        source_name = hosts.definition(group).name
+        with tempfile.TemporaryDirectory() as folder:
+            path = str(Path(folder) / "Legacy.blend")
+            bpy.data.libraries.write(path, {group})
+            for previous in (True, False):
+                bpy.ops.wm.open_mainfile(filepath=str(TEMPLATE))
+                preferences.preview_settings(bpy.context).enabled = previous
+                with bpy.data.libraries.load(path) as (src, dst):
+                    dst.objects = ['Legacy']
+                imported = dst.objects[0]
+                tree = hosts._source_modifier(imported).node_group
+                identifiers = [tree[key] for key in (hosts.REALIZE_SOCKET, hosts.FRAME_SOCKET, hosts.PREVIEW_SOCKET)]
+                positions = [tree.interface.items_tree[key].position for key in identifiers]
+                self.assertEqual(positions, list(range(positions[0], positions[0] + 3)))
+                self.assertFalse(hosts.frame_includes_modifiers(imported))
+                preview = hosts.display_input(imported, hosts.PREVIEW_SOCKET)
+                self.assertEqual(preview.value, previous)
+                preview.value = not previous
+                hosts._name_graph(tree)
+                self.assertEqual(tree[hosts.PREVIEW_SOCKET], identifiers[-1])
+                self.assertEqual(preview.value, not previous)
+                self.assertEqual(hosts.definition(imported).name, source_name)
+
+    def test_preview_switch_is_independent_for_simultaneously_edited_linked_placements(self):
+        member = flat_part('Editable panel')
+        first = create_group([member], 'Array preview', 'NODES')
+        hosts.set_realize(first, True)
+        array = first.modifiers.new('Three panels', 'ARRAY')
+        array.count = 3
+        array.relative_offset_displace = (2, 0, 0)
+        second = linked_copy(first, 20)
+        bpy.context.view_layer.update()
+        a = hosts.display_input(first, hosts.PREVIEW_SOCKET)
+        b = hosts.display_input(second, hosts.PREVIEW_SOCKET)
+        a.value, b.value = True, False
+        hosts.display_input(first, hosts.FRAME_SOCKET).value = True
+        editor.open_path(bpy.context, [first])
+        editor.open_peer(bpy.context, second)
+        shell = hosts.definition(first)[edit_layer._SHELL]
+        def previews():
+            bpy.context.view_layer.update()
+            return {obj[edit_layer._MODIFIER_PREVIEW]: obj for obj in shell.objects if obj.get(edit_layer._MODIFIER_PREVIEW)}
+
+        self.assertEqual(set(previews()), {first})
+        self.assertEqual(eval_faces(previews()[first]), 2)
+        a.value, b.value = False, True
+        current = previews()
+        self.assertEqual((eval_faces(current[first]), eval_faces(current[second])), (0, 2))
+        self.assertTrue(member.visible_get())
+        self.assertTrue(hosts.frame_includes_modifiers(first))
+        self.assertFalse(hosts.frame_includes_modifiers(second))
+        editor.back(bpy.context, all_levels=True)
+        names = first.name, second.name
+        with tempfile.TemporaryDirectory() as folder:
+            path = str(Path(folder) / "Preview.blend")
+            bpy.ops.wm.save_as_mainfile(filepath=path)
+            bpy.ops.wm.open_mainfile(filepath=path)
+            self.assertEqual([hosts.display_input(bpy.data.objects[n], hosts.PREVIEW_SOCKET).value for n in names],
+                             [False, True])
+
+    def test_modifier_preview_keeps_editable_member_and_offset_beveled_copies(self):
+        bpy.ops.mesh.primitive_cube_add()
+        member = bpy.context.active_object
+        host = create_group([member], 'Beveled array', 'NODES', pivot='CURSOR')
+        hosts.set_realize(host, True)
+        array = host.modifiers.new('Array', 'ARRAY')
+        array.use_relative_offset = False
+        array.use_constant_offset = True
+        array.constant_offset_displace = (0.75, 0, 0)
+        bevel = host.modifiers.new('Bevel', 'BEVEL')
+        bevel.width, bevel.segments = 0.12, 3
+        array.count = 1
+        faces_per_copy = eval_faces(host)
+        array.count = 4
+        wm = bpy.context.window_manager
+        wm.gm_modifier_preview_mode = 'SOLID'
+        editor.open_path(bpy.context, [host])
+        shell = hosts.definition(host)[edit_layer._SHELL]
+        preview = next(obj for obj in shell.objects if obj.get(edit_layer._MODIFIER_PREVIEW) == host)
+        settings = preferences.preview_settings(bpy.context)
+        option = hosts.display_input(host, hosts.PREVIEW_SOCKET)
+        option.value = False
+        self.assertEqual(eval_faces(preview), 0)
+        self.assertEqual(settings.display, 'SOLID')
+        settings.display = 'WIRE'
+        self.assertEqual(eval_faces(preview), 0)
+        option.value = True
+        self.assertEqual(preview.display_type, 'WIRE')
+        self.assertEqual(eval_faces(preview), 3 * faces_per_copy)
+        for mode, copies in [('SOLID', 3), ('WIRE', 3), ('OFF', 0), ('SOLID', 3)]:
+            wm.gm_modifier_preview_mode = mode
+            self.assertEqual(eval_faces(preview), copies * faces_per_copy)
+            self.assertTrue(member.visible_get() and member.select_get())
+            self.assertEqual(bpy.context.active_object, member)
+        array.constant_offset_displace = (0, 0, 0)
+        self.assertEqual(eval_faces(preview), 0)
+        editor.back(bpy.context, all_levels=True)
+        self.assertEqual(eval_faces(host), 4 * faces_per_copy)
+        self.assertFalse(any(obj.get(edit_layer._MODIFIER_PREVIEW) for obj in bpy.data.objects))
+
+    def test_modifier_preview_first_enabled_during_edit(self):
+        member = flat_part("Editable panel")
+        host = create_group([member], "Late array", 'NODES')
+        hosts.set_realize(host, True)
+        array = host.modifiers.new("Repeat", 'ARRAY')
+        array.count = 4
+        array.relative_offset_displace = (2, 0, 0)
+        array.show_viewport = False
+        option = hosts.display_input(host, hosts.PREVIEW_SOCKET)
+        option.value = False
+
+        def previews():
+            bpy.context.view_layer.update()
+            return [obj for obj in bpy.data.objects if obj.get(edit_layer._MODIFIER_PREVIEW) == host]
+
+        for _ in range(2):
+            editor.open_path(bpy.context, [host])
+            self.assertEqual(previews(), [])
+            array.show_viewport = True
+            option.value = True
+            preview, = previews()
+            self.assertEqual(eval_faces(preview), 3)
+            self.assertTrue(member.visible_get())
+            editor.back(bpy.context, all_levels=True)
+            self.assertEqual(previews(), [])
+            option.value = False
+
+    def test_frame_cache_reuses_vertices_and_tracks_source_edits(self):
+        member = flat_part("Frame member")
+        host = create_group([member], "Framed", 'NODES', pivot='CURSOR')
+        hosts.set_realize(host, True)
+        hosts.display_input(host, hosts.FRAME_SOCKET).value = True
+        other = flat_part("Unrelated", (20, 0, 0))
+        def frame():
+            bpy.context.view_layer.update()
+            corners, parts = editor._modifier_frame(host)
+            return corners[-1].x, parts[0][0][0]
+
+        edge, points = frame()
+        other.location.x += 2
+        self.assertIs(frame()[1], points)
+        host.location.x += 3
+        moved, after_move = frame()
+        self.assertAlmostEqual(moved, edge + 3)
+        self.assertIs(after_move, points)
+        member.data.vertices[1].co.x += 1
+        member.data.update()
+        edited, after_edit = frame()
+        self.assertAlmostEqual(edited, moved + 1)
+        self.assertIsNot(after_edit, points)
+
+    def test_pick_generated_copies_inside_nested_group(self):
+        from scena import instance_array
+        member = flat_part("Pick source")
+        repeated = create_group([member], "Four panels", 'NODES', pivot='CURSOR')
+        array = repeated.modifiers.new('Repeat', 'ARRAY')
+        array.count = 4
+        array.use_relative_offset = False
+        array.use_constant_offset = True
+        array.constant_offset_displace = (4, 0, 0)
+        outer = create_group([repeated], 'Outer', 'NATIVE', pivot='CURSOR')
+        outer.location.x = -5
+        # Verify both broad phases, including the one used in large scenes.
+        visible = [outer, *(linked_copy(outer, 100 + n * 20) for n in range(64))]
+        for realize in (False, True):
+            hosts.set_realize(repeated, realize)
+            instance_array.sync(repeated)
+            bpy.context.view_layer.update()
+            graph = bpy.context.evaluated_depsgraph_get()
+            index = picking._PickIndex(visible, graph)
+            index.prepare_hover()
+            for i in range(4):
+                groups, members = index.cast(Vector((-5 + 4*i, 0, 10)), Vector((0, 0, -1)))
+                self.assertEqual({h.path for h in groups}, {(outer,), (outer, repeated)})
+                self.assertEqual(members[0].path, (outer, repeated))
+                self.assertEqual(members[0].obj, repeated if i else member)
+            self.assertEqual(index.cast(Vector((-3, 0, 10)), Vector((0, 0, -1))), ([], []))
+
+        front = flat_part("Front", (3, 0, 2))
+        rear = flat_part("Rear", (3, 0, 0))
+        mirror = create_group([front, rear], "Mirrored panels", 'NODES', pivot='CURSOR')
+        hosts.set_realize(mirror, True)
+        mirror.modifiers.new("Mirror panels", 'MIRROR')
+        bpy.context.view_layer.update()
+        index = picking._PickIndex([mirror], bpy.context.evaluated_depsgraph_get())
+        _, originals = index.cast(Vector((3, 0, 10)), Vector((0, 0, -1)))
+        self.assertEqual([h.obj for h in originals], [front, rear])
+        _, reflected = index.cast(Vector((-3, 0, 10)), Vector((0, 0, -1)))
+        self.assertEqual([h.obj for h in reflected], [mirror])
+
+    def test_modifier_preview_keeps_welded_mirror_across_editable_seam(self):
+        member = flat_part('Half', (1, 0, 0))
+        host = create_group([member], 'Mirrored', 'NODES', pivot='CURSOR')
+        hosts.set_realize(host, True)
+        mirror = host.modifiers.new('Mirror', 'MIRROR')
+        mirror.use_clip = True
+        mirror.use_mirror_merge = True
+        self.assertEqual(eval_faces(host), 2)
+        bpy.context.window_manager.gm_modifier_preview_mode = 'SOLID'
+        editor.open_path(bpy.context, [host])
+        shell = hosts.definition(host)[edit_layer._SHELL]
+        preview = next(obj for obj in shell.objects if obj.get(edit_layer._MODIFIER_PREVIEW) == host)
+        self.assertEqual(eval_faces(preview), 1)
+        result = preview.evaluated_get(bpy.context.evaluated_depsgraph_get()).data
+        self.assertLess(result.polygons[0].center.x, 0)
+        self.assertTrue(member.visible_get() and member.select_get())
+        editor.back(bpy.context, all_levels=True)
+        self.assertEqual(eval_faces(host), 2)
 
     def test_reopened_scene_caches_vertex_edits_and_detects_retarget(self):
         part = flat_part('shared mesh')
@@ -354,6 +665,83 @@ class GroupWorkflows(unittest.TestCase):
             self.assertEqual(group.animation_data.action, action)
             self.assertMatrixClose(group.matrix_world, old_world)
             self.assertMatrixClose(child.matrix_world, child_world)
+
+    def test_failed_batch_switch_restores_carriers_and_references(self):
+        first = create_group([flat_part("left")], "Left")
+        second = create_group([flat_part("right")], "Right")
+        first.use_fake_user = True
+        second.parent = first
+        watcher = flat_part("watcher")
+        constraint = watcher.constraints.new("COPY_LOCATION")
+        constraint.target = first
+        mirror = watcher.modifiers.new("Mirror reference", 'MIRROR')
+        mirror.mirror_object = first
+        first.keyframe_insert(data_path="location", frame=1)
+        action = first.animation_data.action
+        select([first, second])
+        layer = bpy.context.view_layer
+        layer.update()
+        world = second.matrix_world.copy()
+        sources = hosts.definition(first), hosts.definition(second)
+        original_ids = tuple(set(items) for items in (bpy.data.objects, bpy.data.meshes, bpy.data.node_groups))
+        copied = hosts._copy_settings
+        attempts = []
+
+        def fail_second(source, target):
+            attempts.append(source)
+            if len(attempts) == 2:
+                raise RuntimeError("Simulated second carrier failure")
+            copied(source, target)
+
+        with patch.object(hosts, "_copy_settings", side_effect=fail_second):
+            self.assertEqual(bpy.ops.groupmanager.switch_type(kind="NODES"), {"CANCELLED"})
+
+        self.assertEqual(attempts, [first, second])
+        self.assertEqual(tuple(hosts.definition(obj) for obj in attempts), sources)
+        self.assertTrue(all(hosts.host_type(obj) == 'NATIVE' for obj in attempts))
+        self.assertTrue(first.use_fake_user)
+        self.assertEqual(first.animation_data.action, action)
+        self.assertEqual(second.parent, first)
+        self.assertEqual(constraint.target, first)
+        self.assertEqual(mirror.mirror_object, first)
+        self.assertEqual(set(layer.objects.selected), {first, second})
+        self.assertEqual(layer.objects.active, first)
+        self.assertMatrixClose(second.matrix_world, world)
+        self.assertEqual(tuple(set(items) for items in (bpy.data.objects, bpy.data.meshes, bpy.data.node_groups)),
+                         original_ids)
+        self.assertEqual(bpy.ops.groupmanager.switch_type(kind="NODES"), {"FINISHED"})
+
+    def test_failed_nested_batch_switch_restores_edit_path_and_shared_definitions(self):
+        desks, monitor, keyboard = nested_workstations(count=2)
+        shared = hosts.definition(desks[0])
+        select([desks[0]])
+        self.assertEqual(bpy.ops.groupmanager.edit(), {"FINISHED"})
+        select([monitor, keyboard])
+        originals = {obj for obj in bpy.data.objects if not editor.is_helper(obj)}
+        definitions = {c for c in bpy.data.collections if hosts.is_definition(c)}
+        show = editor._show
+        attempts = []
+
+        def fail_after_reopening(context, route):
+            show(context, route)
+            attempts.append(route)
+            if len(attempts) == 1:
+                raise RuntimeError("Simulated failure while restoring edit mode")
+
+        with patch.object(editor, "_show", side_effect=fail_after_reopening):
+            self.assertEqual(bpy.ops.groupmanager.switch_type(kind="NODES"), {"CANCELLED"})
+
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(editor.path(bpy.context), [desks[0]])
+        self.assertEqual(editor.edit_layer.open_host(shared), desks[0])
+        self.assertEqual(hosts.definition(desks[0]), shared)
+        self.assertEqual(hosts.definition(desks[1]), shared)
+        self.assertEqual(hosts.host_type(monitor), 'NATIVE')
+        self.assertEqual(hosts.host_type(keyboard), 'NATIVE')
+        self.assertEqual(set(bpy.context.selected_objects), {monitor, keyboard})
+        self.assertEqual(bpy.context.active_object, monitor)
+        self.assertEqual({obj for obj in bpy.data.objects if not editor.is_helper(obj)}, originals)
+        self.assertEqual({c for c in bpy.data.collections if hosts.is_definition(c)}, definitions)
 
     def test_single_user_scopes_preserve_material_slots_and_internal_links(self):
         for kind in ("NATIVE", "NODES"):
@@ -1204,10 +1592,14 @@ class GroupWorkflows(unittest.TestCase):
         second = linked_copy(table, 6)
         third = linked_copy(table, 12)
         select([table, second, third])
+        source = hosts.definition(bolt)
+        self.assertEqual(count_uses(source), 3)
         self.assertEqual(bpy.ops.groupmanager.edit(), {"FINISHED"})
         self.assertEqual(set(editor.peers(bpy.context)) | {editor.path(bpy.context)[-1]}, {table, second, third})
+        self.assertEqual(count_uses(source), 3)
+        self.assertEqual({path[0] for path in usage.paths(bpy.context.scene, source)}, {table, second, third})
         boxes = [corners for host, corners in editor._member_group_boxes(bpy.context, [])
-                 if hosts.definition(host) == hosts.definition(bolt)]
+                 if hosts.definition(host) == source]
         self.assertGreaterEqual(len(boxes), 3)
         xs = sorted(corners[0].x for corners in boxes)
         self.assertGreater(xs[-1] - xs[0], 3)

@@ -7,6 +7,7 @@ from bpy.props import EnumProperty, FloatProperty, IntProperty
 from mathutils import Matrix, Vector
 
 from . import editor
+from .exchange_ids import copy_block
 from .hosts import definition
 
 
@@ -83,7 +84,7 @@ def _removal_check(root, objects):
 
 def _new_slot(root, index):
     # A linked Object copy keeps the placement's geometry node inputs and modifiers.
-    obj = root.copy()
+    obj = copy_block(root)
     try:
         obj.name = f"{root.name} · {index + 1:02d}"
         for prop in (SETTINGS, SLOTS, EXCLUDED):

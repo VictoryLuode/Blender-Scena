@@ -23,6 +23,7 @@ def register():
             module.register()
             _installed_hooks.append(module)
         bpy.app.handlers.load_post.append(_refresh_groups)
+        bpy.app.handlers.blend_import_post.append(_refresh_imported_frames)
         bpy.app.timers.register(_refresh_groups, first_interval=0.0)
     except Exception:
         unregister()
@@ -41,7 +42,18 @@ def _refresh_groups(_unused=None):
     modifier_inputs.refresh()
 
 
+@persistent
+def _refresh_imported_frames(context):
+    from . import hosts
+    for item in context.import_items:
+        tree = item.id
+        if isinstance(tree, bpy.types.GeometryNodeTree) and not tree.library and tree.get(hosts.GRAPH_KEY) == 1:
+            hosts._ensure_display_sockets(tree)
+
+
 def unregister():
+    if _refresh_imported_frames in bpy.app.handlers.blend_import_post:
+        bpy.app.handlers.blend_import_post.remove(_refresh_imported_frames)
     if _refresh_groups in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_refresh_groups)
     if bpy.app.timers.is_registered(_refresh_groups):

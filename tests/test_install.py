@@ -20,9 +20,14 @@ def main():
                         help="Open Blender Preferences and check persistence across two UI sessions")
     args = parser.parse_args()
     with zipfile.ZipFile(args.package) as archive:
-        for path in (ROOT / "scena").iterdir():
-            if path.is_file() and path.suffix in {".py", ".toml"}:
-                assert archive.read(path.name) == path.read_bytes(), f"Stale package file: {path.name}"
+        source = ROOT / "scena"
+        expected = {path.relative_to(source).as_posix(): path for path in source.rglob("*")
+                    if path.is_file() and (path.suffix in {".py", ".toml", ".ttf"} or path.name == "LICENSE")}
+        names = [info.filename for info in archive.infolist() if not info.is_dir()]
+        assert len(names) == len(set(names)), "Duplicate package entries"
+        assert set(names) == set(expected), f"Package file mismatch: {sorted(set(names) ^ set(expected))}"
+        for name, path in expected.items():
+            assert archive.read(name) == path.read_bytes(), f"Stale package file: {name}"
     with tempfile.TemporaryDirectory(prefix="groupmanager-profile-") as temp:
         profile = Path(temp)
         (profile / "extensions" / "user_default").mkdir(parents=True)

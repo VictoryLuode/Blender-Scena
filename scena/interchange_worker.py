@@ -2,12 +2,23 @@
 from collections import defaultdict
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 
 import bpy
 from pxr import Gf, Usd, UsdGeom
 from mathutils import Matrix
+
+
+def report_progress(work, value, stage):
+    pending = work / "progress.tmp"
+    pending.write_text(json.dumps([value, stage]), "utf-8")
+    try:
+        os.replace(pending, work / "progress.json")
+    except PermissionError:
+        # Windows can briefly lock the old file while the viewport reads it.
+        pass
 
 
 def write_usd_layout(work, definitions, instances):
@@ -29,6 +40,7 @@ def write_usd_layout(work, definitions, instances):
 
 
 def export_assets(scene_name, layer_name, scene_id, work):
+    report_progress(work, 8, "Evaluating the scene")
     scene = bpy.data.scenes[scene_name]
     context = bpy.context
     context.window.scene = scene
@@ -82,7 +94,9 @@ def export_assets(scene_name, layer_name, scene_id, work):
     out = work / "assets"
     out.mkdir()
     definitions = []
-    for did, row in representatives.items():
+    total = len(representatives)
+    for number, (did, row) in enumerate(representatives.items(), 1):
+        report_progress(work, 15 + 79 * (number - 1) // total, f"Exporting asset {number}/{total}")
         stage = bpy.data.scenes.new("Scena model")
         context.window.scene = stage
         objects = []
@@ -133,6 +147,7 @@ def export_assets(scene_name, layer_name, scene_id, work):
         bpy.data.scenes.remove(stage)
         for obj in objects:
             bpy.data.objects.remove(obj)
+    report_progress(work, 95, "Writing scene layout")
     write_usd_layout(work, definitions, instances)
     doc = dict(format="scena.interchange", version=1, id=scene_id, name=scene.name, usd_layout="scene.usda",
                definitions=definitions, instances=instances)

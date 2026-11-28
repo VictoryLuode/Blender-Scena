@@ -9,6 +9,7 @@ import bpy
 from mathutils import Matrix
 
 from . import branches, creation, editor, hosts
+from .exchange_ids import new_id
 
 
 _PREFIX = ".Scena Clipboard "
@@ -97,6 +98,7 @@ def _paste(context, path, name):
                 for obj in objects:
                     if obj in before:
                         raise ValueError("The clipboard object could not be copied locally")
+                    new_id(obj)
                     if hosts.definition(obj):
                         changes.duplicate_group_data(obj)
             creation.ensure_no_cycle(target, objects)

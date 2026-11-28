@@ -4,12 +4,13 @@ from pathlib import Path
 import shutil
 import struct
 import sys
+from unittest.mock import patch
 
 import bpy
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import scena
-from scena import hosts
+from scena import hosts, interchange
 
 out = Path(sys.argv[sys.argv.index("--") + 1])
 out.mkdir(parents=True, exist_ok=True)
@@ -65,8 +66,76 @@ assert third["Private board"]["id"] == first["Board 2"]["id"]
 assert third["Private board"]["definition"] != shared
 assert meshes(defs[third["Private board"]["definition"]], "third") == 3
 assert meshes(defs[shared], "third") == 2
+
+directory = out / "current"
+def bundle_files():
+    return {p.relative_to(directory): p.read_bytes() for p in directory.rglob("*") if p.is_file()}
+
+previous = bundle_files()
+job = interchange._ExportJob(directory)
+try:
+    job.start(bpy.context)
+    assert (directory / ".scena-export.lock").is_file()
+finally:
+    job.close()
+assert job.process.poll() is not None and not job.work.exists()
+assert bundle_files() == previous
+
+placements_changed = placed[0]
+placements_changed.location.x += 1
+replace_file = interchange.os.replace
+
+def fail_manifest(source, destination):
+    if source.name == destination.name == "scene.scena.json":
+        raise OSError("Simulated manifest write failure")
+    replace_file(source, destination)
+
+with patch.object(interchange.os, "replace", side_effect=fail_manifest):
+    try:
+        interchange.export_bundle(bpy.context, directory)
+    except OSError as exc:
+        assert str(exc) == "Simulated manifest write failure"
+    else:
+        raise AssertionError("The export did not report the write failure")
+assert bundle_files() == previous
+assert not any(directory.glob(".scena-*"))
+placements_changed.location.x -= 1
+
 bpy.ops.wm.save_as_mainfile(filepath=str(out / "identity.blend"))
 bpy.ops.wm.open_mainfile(filepath=str(out / "identity.blend"))
 last, _ = export("reopened")
 assert last == third
+
+# A linked Scena copy and a legacy/native copy can be the only visible
+# placement on alternating exports. Their IDs must survive hide and reload.
+original = bpy.data.objects["Board 0"]
+original_id = last[original.name]["id"]
+bpy.ops.object.select_all(action='DESELECT')
+original.select_set(True)
+bpy.context.view_layer.objects.active = original
+assert bpy.ops.groupmanager.duplicate_move(kind='INSTANCE') == {'FINISHED'}
+copy = bpy.context.active_object
+copy_id = copy["_scena_exchange_id"]
+assert copy_id != original_id
+legacy = original.copy()
+bpy.context.scene.collection.objects.link(legacy)
+assert legacy["_scena_exchange_id"] == original_id
+original.hide_set(True)
+copy.hide_set(True)
+def visible_ids():
+    assert bpy.ops.scena.export_interchange(directory=str(directory)) == {'FINISHED'}
+    doc = json.loads((directory / "scene.scena.json").read_text("utf-8"))
+    return {row["name"]: row["id"] for row in doc["instances"]}
+only = visible_ids()
+assert original.name not in only and copy.name not in only
+legacy_id = only[legacy.name]
+assert legacy_id not in {original_id, copy_id}
+copy.hide_set(False)
+assert visible_ids()[copy.name] == copy_id
+original.hide_set(False)
+expected = visible_ids()
+assert [expected[o.name] for o in (original, copy, legacy)] == [original_id, copy_id, legacy_id]
+bpy.ops.wm.save_as_mainfile(filepath=str(out / "copy-identity.blend"))
+bpy.ops.wm.open_mainfile(filepath=str(out / "copy-identity.blend"))
+assert visible_ids() == expected
 print("SCENA_INTERCHANGE_PASS")

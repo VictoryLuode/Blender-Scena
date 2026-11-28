@@ -5,6 +5,7 @@ from bpy.props import BoolProperty, EnumProperty, FloatVectorProperty, StringPro
 from mathutils import Matrix, Quaternion, Vector
 
 from . import editor, hosts
+from .exchange_ids import copy_block
 
 
 DEFAULT_KIND = 'NODES'
@@ -654,7 +655,7 @@ class GM_OT_duplicate_shared(bpy.types.Operator):
             raise ValueError("This Link Group also belongs to other scenes. Choose its scope first")
         for coll in obj.users_collection:
             _writable(coll)
-        duplicate = obj.copy()
+        duplicate = copy_block(obj)
         try:
             from .layout_tools import EXCLUDED, INDEX, SETTINGS, SLOTS
             for key in (EXCLUDED, INDEX, SETTINGS, SLOTS):

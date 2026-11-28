@@ -12,7 +12,7 @@ from bpy.props import IntProperty, StringProperty
 from . import editor, hosts
 
 
-def _authored_scene_objects(scene, opened, work_collections):
+def _authored_scene_objects(scene, opened):
     if not opened:
         return scene.objects
     # A source member may also have a legitimate second link in the scene.
@@ -22,7 +22,7 @@ def _authored_scene_objects(scene, opened, work_collections):
     pending = [scene.collection]
     while pending:
         collection = pending.pop()
-        if collection in seen or collection in work_collections:
+        if collection in seen or editor.is_helper(collection):
             continue
         seen.add(collection)
         content = opened.get(collection, collection)
@@ -36,9 +36,8 @@ class UsageIndex:
         self.definitions = [c for c in bpy.data.collections if hosts.is_definition(c)]
         contents = {c: editor.content(c) for c in self.definitions}
         opened = {c: work for c, work in contents.items() if work != c}
-        work_collections = set(opened.values())
         self.roots = {
-            scene: self._placements(_authored_scene_objects(scene, opened, work_collections))
+            scene: self._placements(_authored_scene_objects(scene, opened))
             for scene in bpy.data.scenes if not scene.get("_gm_edit")
         }
         self.children = {c: self._placements(work.all_objects) for c, work in contents.items()}
@@ -132,6 +131,11 @@ def _data():
 def counts(definition):
     """All scenes that contain the definition, with their unfolded placement counts."""
     return dict(_data().totals.get(definition, {}))
+
+
+def placement_label(definition):
+    total = sum(counts(definition).values())
+    return f"{total} instance" if total == 1 else f"{total} instances"
 
 
 def paths(scene, definition, limit=100):

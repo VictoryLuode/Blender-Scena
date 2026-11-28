@@ -249,6 +249,7 @@ def register():
     step.properties.deep = False
     _bindings.append((keymap, step))
     deep = keymap.keymap_items.new("groupmanager.deep_edit", 'LEFTMOUSE', 'DOUBLE_CLICK', ctrl=True, head=True)
+    deep.properties.deep = False
     _bindings.append((keymap, deep))
     # An empty first click can clear the selection. Listen on the viewport itself.
     viewport = config.keymaps.new(name="3D View", space_type='VIEW_3D', region_type='WINDOW')

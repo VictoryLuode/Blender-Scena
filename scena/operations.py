@@ -1,3 +1,5 @@
+from contextlib import ExitStack
+
 import bpy
 from bpy.props import BoolProperty, EnumProperty, StringProperty
 
@@ -15,6 +17,7 @@ class PlacementAction:
         try:
             self.apply(context)
         except (ValueError, RuntimeError) as exc:
+            usage.invalidate()
             self.report({'WARNING'}, str(exc))
             return {'CANCELLED'}
         usage.invalidate()
@@ -67,10 +70,8 @@ class GROUPMANAGER_OT_switch_type(PlacementAction, bpy.types.Operator):
             except ValueError as exc:
                 raise ValueError(f"{obj.name}: {exc}") from exc
 
-        if route and targets == [route[-1]]:
-            hosts.switch_host(route[-1], self.kind)
-            return
-        if route and not all(editor.in_scope(context, obj) for obj in targets):
+        switch_open_group = bool(route and targets == [route[-1]])
+        if route and not switch_open_group and not all(editor.in_scope(context, obj) for obj in targets):
             raise ValueError("Select groups inside the current edit level, or return to the scene first")
 
         selected = list(context.selected_objects)
@@ -78,8 +79,13 @@ class GROUPMANAGER_OT_switch_type(PlacementAction, bpy.types.Operator):
         active_index = selected.index(active) if active in selected else None
         wanted = set(targets)
         target_indices = [i for i, obj in enumerate(selected) if obj in wanted]
-        converted = 0
-        with editor.source_space(context), branches.BranchChanges() as changes:
+        transaction = ExitStack()
+        with editor.source_space(context, transaction=transaction):
+            changes = transaction.enter_context(branches.BranchChanges())
+            switches = transaction.enter_context(hosts.HostSwitches())
+            if switch_open_group:
+                switches.convert(route[-1], self.kind)
+                return
             if route and self.local:
                 local_indices = [i for i, obj in enumerate(selected) if editor.in_scope(context, obj)]
                 members = [selected[i] for i in local_indices]
@@ -89,13 +95,9 @@ class GROUPMANAGER_OT_switch_type(PlacementAction, bpy.types.Operator):
             for i in target_indices:
                 name = selected[i].name
                 try:
-                    selected[i] = hosts.switch_host(selected[i], self.kind)
-                except (ValueError, RuntimeError) as exc:
-                    if not converted:
-                        raise
-                    self.report({'WARNING'}, f"Converted {converted} groups. Stopped at {name}: {exc}")
-                    break
-                converted += 1
+                    selected[i] = switches.convert(selected[i], self.kind)
+                except (ValueError, ReferenceError, RuntimeError) as exc:
+                    raise ValueError(f"{name}: {exc}") from exc
             if route and self.local:
                 editor.sync_path(context, localized[:-1])
 
@@ -189,6 +191,7 @@ class GROUPMANAGER_OT_prepare_hard_ops(PlacementAction, bpy.types.Operator):
     bl_idname = "groupmanager.prepare_hard_ops"
     bl_label = "Prepare for Hard Ops"
     bl_description = "Give the active placement mesh output for Hard Ops modifiers while keeping its shared source"
+    bl_options = {'INTERNAL', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
@@ -225,6 +228,23 @@ class GROUPMANAGER_OT_make_single_user(PlacementAction, bpy.types.Operator):
         ('OBJECT_DATA', "Group and Data", "Also make meshes, curves, and other data single-user. Materials stay linked"),
         ('OBJECT_DATA_MATERIALS', "Group, Data, and Materials", "Also make meshes and the materials on members single-user"),
     ], default='OBJECT_DATA')
+
+    def invoke(self, context, event):
+        if self.properties.is_property_set("scope", ghost=False):
+            return self.execute(context)
+        return context.window_manager.invoke_props_dialog(self, width=390)
+
+    def draw(self, context):
+        source = hosts.definition(context.active_object)
+        layout = self.layout
+        if source:
+            layout.label(text=usage.placement_label(source), icon='LINKED')
+        layout.column().prop(self, "scope", expand=True)
+        mesh = "Meshes and other data stay shared" if self.scope == 'OBJECT' else "Meshes and other data become independent"
+        materials = "Materials become independent" if self.scope == 'OBJECT_DATA_MATERIALS' else "Materials stay shared"
+        layout.label(text=mesh)
+        layout.label(text=materials)
+        layout.label(text="Nested group definitions stay shared")
 
     @classmethod
     def description(cls, context, properties):

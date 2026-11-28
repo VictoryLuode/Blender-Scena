@@ -71,6 +71,8 @@ On a Geometry Nodes group, open the **Scena Group** modifier and use **Convert t
 
 Scena supports Hard Ops. [Modifier guide](docs/user-guide.md#use-modifiers)
 
+Use **Modifier Preview** to see generated copies as you edit a group. **Frame with Modifiers** fits the outline to the full result. You can hover over an array or mirror copy in **Pick**, or Ctrl-double-click its surface to enter the owning group.
+
 ## Support and license
 
 Include your Blender and Scena versions and the steps to reproduce the issue when filing a bug report. [GitHub Issues](https://github.com/VictoryLuode/Blender-Scena/issues)

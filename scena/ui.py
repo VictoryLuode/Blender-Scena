@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import blf
 import bpy
-from bpy.props import BoolProperty, PointerProperty
+from bpy.props import BoolProperty, EnumProperty, PointerProperty
 
 from . import creation, editor, hosts, modeling, operations, preferences, usage
 
@@ -21,12 +21,12 @@ class ObjectProperties:
 
 
 def _shown_group(context):
-    """The group whose details Info should show."""
+    """Show the selected group, or the level currently being edited."""
     obj = context.active_object
-    if obj is not None and hosts.definition(obj):
+    if obj is not None and obj.select_get() and hosts.definition(obj):
         return obj
     route = editor.path(context)
-    return route[-1] if route else obj
+    return route[-1] if route else None
 
 
 class SCENA_MT_group_data(bpy.types.Menu):
@@ -41,20 +41,41 @@ class SCENA_MT_group_data(bpy.types.Menu):
 
 def _draw_group_data(field, context, group, source):
     count = sum(usage.counts(source).values())
-    parts = field.column(align=True)
-    data = parts.row(align=True)
+    data = field.row(align=True)
     browse = data.row(align=True)
     browse.enabled = context.active_object == group and bpy.ops.groupmanager.choose_data.poll()
     browse.ui_units_x = 1.7
     browse.menu(SCENA_MT_group_data.bl_idname, text=" ", icon='OUTLINER_COLLECTION')
     data.prop(source, "name", text="")
 
-    data.operator("groupmanager.usages", text=str(count)).definition_uid = str(source.session_uid)
+    if count > 1:
+        number = data.row(align=True)
+        number.ui_units_x = max(1.5, 0.7 + len(str(count)) * 0.6)
+        number.enabled = (context.active_object == group and context.mode == 'OBJECT'
+                          and group.is_editable and not group.override_library and editor.in_scope(context, group))
+        number.operator_context = 'EXEC_DEFAULT'
+        number.operator("groupmanager.make_single_user", text=str(count)).scope = 'OBJECT'
     keep = data.row(align=True)
     keep.ui_units_x = 1.0
     keep.prop(source, "use_fake_user", text="", toggle=True)
-    if context.active_object == group and context.mode == 'OBJECT' and editor.in_scope(context, group) and count > 1:
-        parts.operator("groupmanager.make_single_user", text="Make Group Unique").scope = 'OBJECT'
+
+
+def _draw_group_scope(layout, context, group):
+    source = hosts.definition(group)
+    if source is None:
+        return
+    route = editor.path(context)
+    if group in route:
+        level = route.index(group) + 1
+    elif group in editor.peers(context):
+        level = len(route)
+    elif route and (editor.owner_host(context, group) or group.get("_gm_mirror_host") in editor.peers(context)):
+        level = len(route) + 1
+    else:
+        level = 1
+    text = f"Level {level} · {usage.placement_label(source)}"
+    layout.operator("groupmanager.usages", text=text, icon='LINKED',
+                    emboss=False).definition_uid = str(source.session_uid)
 
 
 def _group_info(layout, context, *, fit_panel=None):
@@ -116,6 +137,8 @@ def _group_info(layout, context, *, fit_panel=None):
         else:
             field.template_ID(active, data_prop)
     if source:
+        if fit_panel is not None:
+            _draw_group_scope(column, context, group)
         field = column.row(align=True)
         field.use_property_split = False
         field.use_property_decorate = False
@@ -284,8 +307,8 @@ class SCENA_MT_group_operations(bpy.types.Menu):
             layout.operator("groupmanager.duplicate_move", text=label, icon='DUPLICATE').kind = kind
         layout.separator()
         select_instances_button(layout, context)
+        layout.operator("groupmanager.make_single_user")
         tool_controls(layout, context)
-        layout.operator("groupmanager.prepare_hard_ops", icon='MODIFIER')
         switch_type_buttons(layout, context)
 
 
@@ -405,6 +428,7 @@ class GROUPMANAGER_PT_current(Sidebar, bpy.types.Panel):
     def draw(self, context):
         if self.bl_space_type == 'PROPERTIES':
             return
+        _draw_group_scope(self.layout, context, _shown_group(context))
         edit_navigation(self.layout, context)
         all_group_controls(self.layout, context)
 
@@ -586,26 +610,6 @@ class GROUPMANAGER_OT_quick(bpy.types.Operator):
         return bpy.ops.wm.call_menu_pie(name="GROUPMANAGER_MT_quick")
 
 
-def _header(self, context):
-    space = context.space_data
-    if space.type != 'VIEW_3D' or not space.overlay.show_overlays:
-        return
-    route = editor.path(context)
-    if route:
-        prefs = preferences.get(context)
-        if prefs and not prefs.show_edit_header:
-            return
-        coll = hosts.definition(route[-1])
-        count = sum(usage.counts(coll).values()) if coll else 0
-        trail = self.layout.row(align=True)
-        for index, host in enumerate(route[:-1]):
-            jump = trail.operator("groupmanager.back", text=host.name, emboss=False)
-            jump.steps = len(route) - index - 1
-            trail.label(text="", icon='RIGHTARROW')
-        trail.label(text=f"{route[-1].name} · {count}")
-        self.layout.operator("groupmanager.back", text="", icon='BACK')
-
-
 CLASSES = (SCENA_PT_overlay_frame, SCENA_MT_group_data, SCENA_MT_duplicate, SCENA_MT_group_operations, GROUPMANAGER_PT_group_data, GROUPMANAGER_PT_current, GROUPMANAGER_PT_info,
            SCENA_PT_visibility_display, SCENA_PT_duplicate_choices, SCENA_PT_group_operations, GROUPMANAGER_PT_info_light,
            GROUPMANAGER_PT_object, GROUPMANAGER_PT_object_info,
@@ -632,6 +636,44 @@ def _set_keep_modifiers(wm, value):
         wm["gm_keep_group_modifiers"] = value
 
 
+def _active_preview_input(context):
+    entry = hosts.display_input(context.active_object, hosts.PREVIEW_SOCKET)
+    if entry is not None:
+        return entry
+    route = editor.path(context)
+    return hosts.display_input(route[-1], hosts.PREVIEW_SOCKET) if route else None
+
+
+def _get_modifier_preview_mode(_wm):
+    settings = preferences.preview_settings(bpy.context)
+    entry = _active_preview_input(bpy.context)
+    enabled = entry.value if entry is not None else settings.enabled
+    return int(settings.display == 'SOLID') if enabled else 2
+
+
+def _set_modifier_preview_mode(_wm, value):
+    settings = preferences.preview_settings(bpy.context)
+    if value != 2:
+        settings.display = preferences.PREVIEW_DISPLAYS[value][0]
+    entry = _active_preview_input(bpy.context)
+    if entry is not None:
+        entry.value = value != 2
+    else:
+        settings.enabled = value != 2
+
+
+def _register_modifier_preview():
+    # Manual registration (including background scripts) has no AddonPreferences entry.
+    bpy.types.WindowManager.gm_modifier_preview = PointerProperty(type=preferences.SCENA_PG_modifier_preview,
+                                                                  options={'SKIP_SAVE'})
+    # Compatibility with scripts using the original three-way switch.
+    bpy.types.WindowManager.gm_modifier_preview_mode = EnumProperty(
+        name="Modifier Preview",
+        items=(*preferences.PREVIEW_DISPLAYS, ('OFF', "Off", "Hide the modifier preview", 2)),
+        get=_get_modifier_preview_mode, set=_set_modifier_preview_mode, options={'HIDDEN', 'SKIP_SAVE'},
+    )
+
+
 def register():
     bpy.types.Scene.gm_create_settings = PointerProperty(type=creation.GM_PG_create_settings)
     bpy.types.WindowManager.gm_keep_group_modifiers = BoolProperty(
@@ -639,7 +681,7 @@ def register():
         description="When ungrouping, keep this group's modifiers on the objects inside it",
         get=_get_keep_modifiers, set=_set_keep_modifiers,
     )
-    bpy.types.VIEW3D_HT_header.append(_header)
+    _register_modifier_preview()
     _install_add_menu()
 
 
@@ -652,6 +694,7 @@ def unregister():
         _add_menu_hook = None
     else:
         bpy.types.VIEW3D_MT_add.remove(_add_menu)
-    bpy.types.VIEW3D_HT_header.remove(_header)
+    del bpy.types.WindowManager.gm_modifier_preview_mode
+    del bpy.types.WindowManager.gm_modifier_preview
     del bpy.types.WindowManager.gm_keep_group_modifiers
     del bpy.types.Scene.gm_create_settings

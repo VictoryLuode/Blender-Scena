@@ -1,0 +1,2 @@
+# The installation test compares the ZIP payload byte for byte across platforms.
+scena/** -text

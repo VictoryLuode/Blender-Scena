@@ -6,6 +6,7 @@ import bpy
 from mathutils import Matrix
 
 from . import hosts
+from .exchange_ids import copy_block
 
 
 class BranchChanges:
@@ -151,7 +152,7 @@ def _copy_definition(source, name, changes, scope='OBJECT_DATA'):
     for original in [source, *source.children_recursive]:
         if original in collection_map:
             continue
-        copy = changes.own(original.copy())
+        copy = changes.own(copy_block(original))
         collection_map[original] = copy
         for obj in list(copy.objects):
             copy.objects.unlink(obj)
@@ -165,7 +166,7 @@ def _copy_definition(source, name, changes, scope='OBJECT_DATA'):
     object_map = {}
     data_map = {}
     for original in sorted(objects, key=lambda obj: obj.name):
-        copy = changes.own(original.copy())
+        copy = changes.own(copy_block(original))
         object_map[original] = copy
         data = original.data
         if scope != 'OBJECT' and data and original.type != 'EMPTY':
@@ -308,7 +309,7 @@ def duplicate_placements(objects, linked, nested=False):
             _check_root(obj)
             if not obj.users_collection:
                 raise ValueError("The Link Group has no collection")
-            duplicate = obj.copy()
+            duplicate = copy_block(obj)
             try:
                 for key in (EXCLUDED, INDEX, SETTINGS, SLOTS):
                     if key in duplicate:
@@ -368,7 +369,7 @@ def _linked_mirror_group(host, mirrors):
     matrix = host.matrix_world.copy()
     for modifier in mirrors:
         matrix = _mirror_transform(matrix, modifier)
-    duplicate = host.copy()
+    duplicate = copy_block(host)
     try:
         for key in (EXCLUDED, INDEX, SETTINGS, SLOTS):
             if key in duplicate:

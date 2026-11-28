@@ -1,7 +1,8 @@
 """Edit definition members in-place in the original Blender scene."""
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from time import perf_counter
 
 import bpy
 from bpy.app.handlers import persistent
@@ -23,6 +24,9 @@ _suspended = set()
 _shape_index = None
 _frame_cache = {}
 _extent_cache = {}
+_extent_mesh_cache = {}
+_modifier_geometry_cache = {}
+_projection_cache = {}
 _line_shader = None
 _LEVEL_MEMBER_COLOR = (0.33, 0.64, 1.0)
 # Private-use glyphs from Blender's outliner_ob_* SVGs, in font order.
@@ -35,12 +39,20 @@ _type_icons = {kind: chr(0xE000 + index) for index, kind in enumerate((
 ))}
 
 
-def _drop_bounds():
-    """Drop world-space frame corners. The next draw builds one shared shape index."""
+def _drop_world_bounds():
+    """World corners and edit paths depend on the current placement transforms."""
     global _shape_index
     _shape_index = None
     _frame_cache.clear()
     _extent_cache.clear()
+
+
+@persistent
+def _drop_bounds(_unused=None):
+    _drop_world_bounds()
+    _extent_mesh_cache.clear()
+    _modifier_geometry_cache.clear()
+    _projection_cache.clear()
 
 
 def _shapes(context):
@@ -48,7 +60,7 @@ def _shapes(context):
     global _shape_index
     if _shape_index is None:
         from .picking import _PickIndex
-        _shape_index = _PickIndex([], context.evaluated_depsgraph_get())
+        _shape_index = _PickIndex([], context.evaluated_depsgraph_get(), modifier_surfaces=False)
     return _shape_index
 
 
@@ -464,7 +476,7 @@ def _object_under_mouse(context, event):
     direction = view3d_utils.region_2d_to_vector_3d(region, region.data, xy)
     hit, _location, _normal, _index, obj, _matrix = context.scene.ray_cast(
         context.evaluated_depsgraph_get(), origin, direction)
-    return obj if hit else None
+    return obj if hit and not is_helper(obj) else None
 
 
 def _chain_inside(base, target):
@@ -1050,34 +1062,34 @@ def sync_path(context, placements):
 
 
 @contextmanager
-def source_space(context):
+def source_space(context, *, transaction=None):
     """Run a data operation in canonical coordinates, then expose the edited path again."""
     scene = context.scene
     key = scene.session_uid
     route = path(context)
     if not route or key in _suspended:
-        yield
+        with transaction or nullcontext():
+            yield
         return
     layer = _layer(scene, context)
     active = context.active_object
     selected = list(context.selected_objects)
     _fold(scene, layer)
     _suspended.add(key)
-    try:
-        yield
-    finally:
+
+    def resume():
         _suspended.discard(key)
-        route = path(context)
+        current = path(context)
         try:
-            if route:
-                _validate(scene, route)
-                _show(context, route)
+            if current:
+                _validate(scene, current)
+                _show(context, current)
                 # Keep the active member where the operation preserved its identity.
                 try:
                     suitable = active if active and layer.objects.get(active.name) == active else None
                 except ReferenceError:
                     suitable = None
-                _set_focus(context, hosts.definition(route[-1]), suitable)
+                _set_focus(context, hosts.definition(current[-1]), suitable)
                 for obj in selected:
                     try:
                         if layer.objects.get(obj.name) == obj and not obj.hide_get(view_layer=layer):
@@ -1086,10 +1098,38 @@ def source_space(context):
                         pass
             else:
                 _finish(context)
-        except (ValueError, ReferenceError, RuntimeError):
+        except Exception:
             _fold(scene, layer)
+            raise
+
+    if transaction is None:
+        try:
+            yield
+        finally:
+            try:
+                resume()
+            except Exception:
+                _finish(context)
+                raise
+        return
+
+    try:
+        with transaction:
+            yield
+            # Keep rollback available until the converted edit path is visible again.
+            resume()
+    except Exception:
+        _write(scene, _ROUTE, route)
+        try:
+            resume()
+        except Exception:
             _finish(context)
             raise
+        for obj in list(layer.objects.selected):
+            if obj not in selected:
+                obj.select_set(False, view_layer=layer)
+        layer.objects.active = active if active and layer.objects.get(active.name) == active else None
+        raise
 
 
 def open_path(context, placements, unique=False, *, scope='OBJECT_DATA', stay_on_host=False):
@@ -1197,8 +1237,30 @@ def _close_editors(_unused=None):
 
 @persistent
 def _invalidate_bounds(scene, depsgraph):
-    edit_layer.sync_linked_mirrors()
-    _drop_bounds()
+    if scene.get(_ROUTE) and depsgraph.mode == 'VIEWPORT':
+        edit_layer.sync_linked_mirrors()
+        if depsgraph.view_layer == scene.view_layers.get(scene.get(_LAYER, "")):
+            changed = {u.id.original for u in depsgraph.updates if isinstance(u.id, bpy.types.Object)}
+            for host in (*_read(scene, _ROUTE), *_read(scene, _PEERS)):
+                if host in changed:
+                    edit_layer.refresh_open_modifier_preview(host, depsgraph.view_layer)
+    _drop_world_bounds()
+    if not (_extent_mesh_cache or _modifier_geometry_cache or _projection_cache):
+        return
+    changed = set()
+    for update in depsgraph.updates:
+        data = update.id.original
+        # Collection membership and node interfaces can change the set of parts.
+        if isinstance(data, (bpy.types.Collection, bpy.types.NodeTree)):
+            _drop_bounds()
+            return
+        if isinstance(data, bpy.types.Object) and update.is_updated_geometry:
+            changed.add(data.session_uid)
+    if changed:
+        for cache in (_modifier_geometry_cache, _extent_mesh_cache, _projection_cache):
+            for key in tuple(cache):
+                if key[0] in changed:
+                    del cache[key]
 
 
 def _bounds_style(context, preview=False, always=False):
@@ -1748,6 +1810,34 @@ class _FrameLabels:
         dy = max(frame[1] - bottom - height, bottom - frame[3], 0)
         return (dx * dx + dy * dy) ** 0.5
 
+    @staticmethod
+    def _blocked_y(obstacles, lo, hi, y, height, gap):
+        import numpy as np
+
+        x1, x2, y1, y2, thickness = obstacles[(obstacles[:, 1] >= lo) & (obstacles[:, 0] <= hi)].T
+        if not len(x1):
+            return y, y
+        width = x2 - x1
+        slope = np.divide(y2 - y1, width, out=np.zeros_like(y1), where=width != 0)
+        start_y = y1 + (np.maximum(lo, x1) - x1) * slope
+        end_y = y1 + (np.minimum(hi, x2) - x1) * slope
+        low = np.minimum(start_y, end_y) - height - gap
+        high = np.maximum(start_y, end_y) + thickness + gap
+        if not np.any((low < y) & (high > y)):
+            return y, y
+        order = low.argsort()
+        low, high = low[order], high[order]
+        furthest = np.maximum.accumulate(high)
+        first = np.searchsorted(low, y, side='left') - 1
+        if first < 0 or furthest[first] <= y:
+            return y, y
+        # The label can touch a stroke's clearance boundary.
+        gaps = np.flatnonzero(low[1:] >= furthest[:-1]) + 1
+        interval = np.searchsorted(gaps, first, side='right')
+        begin = gaps[interval - 1] if interval else 0
+        end = gaps[interval] if interval < len(gaps) else len(furthest)
+        return low[begin], furthest[end - 1]
+
     def _free_position(self, anchor_x, anchor_y, width, height, limits, frame=None):
         gap = self.margin
         min_x, min_y, max_x, max_y = limits
@@ -1766,34 +1856,27 @@ class _FrameLabels:
             for x1, x2, y1, y2, thickness in nearby:
                 if min(y1, y2) <= frame[3] + height and max(y1, y2) + thickness >= frame[1] - height:
                     edges.update((x2 + gap + 1, x1 - width - gap - 1))
-            candidates.extend(sorted((v for v in edges if abs(v - x) <= width), key=lambda v: (abs(v - x), v)))
+            nearest = sorted((v for v in edges if abs(v - x) <= width), key=lambda v: (abs(v - x), v))
+            # Dense dashed outlines contribute many nearly identical candidate positions.
+            buckets = {}
+            spacing = max(2.0, gap, width / 6)
+            for edge in nearest:
+                buckets.setdefault(round((edge - x) / spacing), edge)
+            candidates.extend(buckets.values())
         candidates.extend((min_x, max_x))
+        columns_cache = {}
         for left in dict.fromkeys(min(max(candidate, min_x), max_x) for candidate in candidates):
             if best is not None and abs(left - anchor_x) >= best[0]:
                 continue
             lo, hi = left - gap, left + width + gap
-            obstacles = set()
-            for column in self._columns(lo, hi):
-                obstacles.update(self.columns.get(column, ()))
-            blocked = []
-            for x1, x2, y1, y2, thickness in obstacles:
-                if x2 < lo or x1 > hi:
-                    continue
-                if x1 != x2:
-                    slope = (y2 - y1) / (x2 - x1)
-                    low = y1 + (max(lo, x1) - x1) * slope
-                    high = y1 + (min(hi, x2) - x1) * slope
-                else:
-                    low, high = y1, y2
-                blocked.append((min(low, high) - height - gap, max(low, high) + thickness + gap))
-            below = above = y
-            blocked.sort()
-            for start, end in blocked:
-                if start < above < end:
-                    above = end
-            for start, end in reversed(blocked):
-                if start < below < end:
-                    below = start
+            columns = self._columns(lo, hi)
+            obstacles = columns_cache.get(columns)
+            if obstacles is None:
+                import numpy as np
+                relevant = set().union(*(self.columns.get(column, ()) for column in columns))
+                obstacles = np.asarray(list(relevant), dtype=float).reshape(-1, 5)
+                columns_cache[columns] = obstacles
+            below, above = self._blocked_y(obstacles, lo, hi, y, height, gap)
             for bottom in (below, above):
                 if min_y <= bottom <= max_y:
                     score = abs(left - anchor_x) + abs(bottom - anchor_y)
@@ -2069,7 +2152,7 @@ def _draw_bounds():
                                 style, ui_scale, buttons, group_mode, labels=labels,
                                 frame_style='FRAME' if host == open_leaf else
                                             'DASHED' if route and host == route[0] else None)
-        if host == open_leaf and rect is not None and (style.show_2d or style.show_3d):
+        if host == route[0] and rect is not None and (style.show_2d or style.show_3d):
             _open_frame_rects[pointer] = (host, rect)
 
     # Reserve ancestor names first, independently of frame draw order.
@@ -2104,53 +2187,152 @@ def _button_hit(region, x, y):
     return None, None
 
 
-def _group_extent_points(host, placement=None):
-    """World corners of the objects in a group, not the single surrounding box."""
-    source = hosts.definition(host)
-    if source is None or host is None:
+def _extent_geometry(obj, evaluated):
+    """Read evaluated vertices once, with conservative bounds for large vertex blocks."""
+    import numpy as np
+    from . import frame_geometry
+    from .picking import _corners, _local_bounds
+
+    mesh = evaluated.data if evaluated.type == 'MESH' else None
+    key = (obj.session_uid, bpy.context.evaluated_depsgraph_get().as_pointer())
+    if key in _extent_mesh_cache:
+        return _extent_mesh_cache[key]
+    temporary = mesh is None and obj.type in {'CURVE', 'SURFACE', 'FONT', 'META', 'CURVES'}
+    if temporary:
+        mesh = evaluated.to_mesh()
+    try:
+        if mesh is not None and len(mesh.vertices):
+            points = frame_geometry.coordinates(mesh.vertices, "co")
+        else:
+            points = np.asarray(_corners(_local_bounds(evaluated.bound_box)), dtype=np.float32)
+    finally:
+        if temporary:
+            evaluated.to_mesh_clear()
+
+    geometry = frame_geometry.vertex_blocks(points)
+    _extent_mesh_cache[key] = geometry
+    return geometry
+
+
+def _local_modifier_frame(host, graph):
+    from . import frame_geometry
+    evaluated = host.evaluated_get(graph)
+    key = (host.session_uid, graph.as_pointer())
+    if key not in _modifier_geometry_cache:
+        _modifier_geometry_cache[key] = frame_geometry.evaluated_frame(evaluated, graph)
+    return _modifier_geometry_cache[key]
+
+
+def _modifier_frame(host, placement=None):
+    if not hosts.frame_includes_modifiers(host):
         return None
+    graph = bpy.context.evaluated_depsgraph_get()
+    evaluated = host.evaluated_get(graph)
+    corners, parts = _local_modifier_frame(host, graph)
+    world = evaluated.matrix_world if placement is None else placement
+    return [world @ corner for corner in corners], [(block, world @ local) for block, local in parts]
+
+
+def _frame_extent_points(host, placement=None):
+    """Evaluated geometry at the occurrence shown by an object or group frame."""
+    source = hosts.definition(host)
+    if source is None:
+        from .pick_outline import MESH_TYPES
+        if host.type not in MESH_TYPES:
+            return None
+        evaluated = host.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        if evaluated.type == 'MESH' and not len(evaluated.data.vertices):
+            return None
+        world = evaluated.matrix_world if placement is None else placement
+        return [(_extent_geometry(host, evaluated), world)]
     key = (bpy.context.scene.session_uid, host.as_pointer())
     if placement is not None:
         key += (placement.copy().freeze(),)
     cached = _extent_cache.get(key)
     if cached is not None:
         return cached
-    from .picking import _corners
+    from .picking import _visible_members
     index = _shapes(bpy.context)
     placed = placement if placement is not None else _placement_matrix(host, source, index._depsgraph)
     points = []
 
-    def walk(shape, matrix, seen):
-        for _obj, local, bounds in shape.leaves:
-            points.extend(matrix @ local @ corner for corner in _corners(bounds))
-        for _obj, child, local in shape.children:
-            if child in seen:
+    def walk(definition, matrix, seen):
+        actual = content(definition)
+        transform = matrix @ Matrix.Translation(-definition.instance_offset)
+        if actual != definition:
+            transform = transform @ content_frame(definition).inverted()
+        for obj in _visible_members(actual):
+            if is_helper(obj) or obj.hide_viewport:
                 continue
-            walk(index._shape(child, seen | {child}), matrix @ local, seen | {child})
+            evaluated = obj.evaluated_get(index._depsgraph)
+            world = transform @ evaluated.matrix_world
+            child = hosts.definition(obj)
+            if child is None:
+                points.append((_extent_geometry(obj, evaluated), world))
+            elif child not in seen:
+                walk(child, world, seen | {child})
 
-    walk(index._shape(source, {source}), placed, {source})
+    walk(source, placed, {source})
     _extent_cache[key] = points
     return points
 
 
-def _aabb_center(points):
-    xs = [point.x for point in points]
-    ys = [point.y for point in points]
-    zs = [point.z for point in points]
-    from mathutils import Vector
-    return Vector((
-        (min(xs) + max(xs)) * 0.5,
-        (min(ys) + max(ys)) * 0.5,
-        (min(zs) + max(zs)) * 0.5,
-    ))
+def _extent_screen_limits(extents, region, rv3d):
+    import numpy as np
 
+    low = np.full(2, np.inf)
+    high = np.full(2, -np.inf)
+    for (points, corners, block_size), world in extents:
+        matrix = np.asarray(rv3d.perspective_matrix @ world, dtype=np.float32)[[0, 1, 3]]
 
-def _rect_area(limits):
-    return max(0.0, limits[2] - limits[0]) * max(0.0, limits[3] - limits[1])
+        def project(vertices):
+            return vertices @ matrix[:, :3].T + matrix[:, 3]
+
+        def expand(clip):
+            front = clip[clip[:, 2] > 0]
+            if len(front):
+                projected = front[:, :2] / front[:, 2:3]
+                np.minimum(low, projected.min(axis=0), out=low)
+                np.maximum(high, projected.max(axis=0), out=high)
+
+        if corners is None:
+            expand(project(points))
+            continue
+        expand(project(points[::block_size]))
+        box = project(corners)
+        near = box[:, :, 2].min(axis=1)
+        far = box[:, :, 2].max(axis=1)
+        # Perspective maps a box in front of the eye inside its projected corners.
+        # A box crossing the eye plane can only be resolved from its real vertices.
+        visible = near > 0
+        front = box[visible]
+        projected = front[:, :, :2] / front[:, :, 2:3]
+        candidates = (near <= 0) & (far > 0)
+        candidates[visible] = ((projected.min(axis=1) <= low + 1e-5).any(axis=1)
+                               | (projected.max(axis=1) >= high - 1e-5).any(axis=1))
+        if candidates.any():
+            expand(project(points[np.repeat(candidates, block_size)[:len(points)]]))
+    if not np.isfinite(low).all():
+        return None
+    return ((1 + low[0]) * region.width / 2, (1 + low[1]) * region.height / 2,
+            (1 + high[0]) * region.width / 2, (1 + high[1]) * region.height / 2)
 
 
 def _padded_rect(rect, pad):
     return (rect[0] - pad, rect[1] - pad, rect[2] + pad, rect[3] + pad)
+
+
+def _fitted_limits(host, extent, region, view):
+    key = (host.session_uid, region.as_pointer())
+    signature = (region.width, region.height, view.perspective_matrix.copy().freeze(),
+                 tuple((id(block[0]), world.copy().freeze()) for block, world in extent))
+    previous = _projection_cache.get(key)
+    if previous is not None and previous[0] == signature:
+        return previous[2]
+    limits = _extent_screen_limits(extent, region, view)
+    # Keep the arrays alive while their identities are part of the signature.
+    _projection_cache[key] = signature, extent, limits
+    return limits
 
 
 def _screen_limits(points):
@@ -2174,7 +2356,9 @@ def _draw_screen_box(region, rv3d, corners, color, host, name, active, editing, 
     import gpu
     from gpu_extras.batch import batch_for_shader
 
-    points = [view3d_utils.location_3d_to_region_2d(region, rv3d, corner) for corner in corners]
+    modified = _modifier_frame(host, placement) if style and (style.show_2d or style.show_3d) else None
+    frame_corners, extent = modified if modified is not None else (corners, None)
+    points = [view3d_utils.location_3d_to_region_2d(region, rv3d, corner) for corner in frame_corners]
     projected = [point for point in points if point is not None]
     if not projected:
         return
@@ -2182,25 +2366,10 @@ def _draw_screen_box(region, rv3d, corners, color, host, name, active, editing, 
     box_limits = _screen_limits(projected)
     flat_limits = box_limits
     if style is not None and style.show_2d and style.fit_2d == "GROUP":
-        extent = _group_extent_points(host, placement)
+        if extent is None:
+            extent = _frame_extent_points(host, placement)
         if extent:
-            extent_points = [view3d_utils.location_3d_to_region_2d(region, rv3d, corner) for corner in extent]
-            extent_points = [point for point in extent_points if point is not None]
-            extent_limits = _screen_limits(extent_points)
-            overlaps = extent_limits and not (
-                extent_limits[2] < box_limits[0] - 30 or box_limits[2] < extent_limits[0] - 30
-                or extent_limits[3] < box_limits[1] - 30 or box_limits[3] < extent_limits[1] - 30
-            )
-            if overlaps and _rect_area(extent_limits) <= _rect_area(box_limits) * 1.05:
-                flat_limits = extent_limits
-            elif corners:
-                delta = _aabb_center(corners) - _aabb_center(extent)
-                moved = [point + delta for point in extent]
-                moved_points = [view3d_utils.location_3d_to_region_2d(region, rv3d, point) for point in moved]
-                moved_points = [point for point in moved_points if point is not None]
-                moved_limits = _screen_limits(moved_points)
-                if moved_limits:
-                    flat_limits = moved_limits
+            flat_limits = _fitted_limits(host, extent, region, rv3d) or box_limits
     if style and (style.show_2d or style.show_3d):
         gap = style.hierarchy_gap * max(0.8, ui_scale)
         source = hosts.definition(host)
@@ -2212,7 +2381,7 @@ def _draw_screen_box(region, rv3d, corners, color, host, name, active, editing, 
                 pad += margin
     box_fit = style and style.show_2d and style.fit_2d == 'BOX'
     if box_fit or (style and style.show_3d):
-        padded = _padded_box_corners(corners, region, rv3d, 4.0)
+        padded = _padded_box_corners(frame_corners, region, rv3d, 4.0)
         points = [view3d_utils.location_3d_to_region_2d(region, rv3d, point) for point in padded]
         visible = [point for point in points if point is not None]
         if source:
@@ -2777,53 +2946,78 @@ class GM_OT_bounds_controls(bpy.types.Operator):
             return {'CANCELLED'}
         if context.mode != 'OBJECT':
             _overlay_buttons.clear()
+            self._back_press = None
             return {'PASS_THROUGH'}
         if event.type == 'LEFTMOUSE' and event.value in {'PRESS', 'DOUBLE_CLICK'}:
             region = _view3d_under_mouse(event)
             if event.shift or event.ctrl or region is None:
+                self._back_press = None
                 _pending_name_click = None
                 _pending_object_click = None
                 _pending_empty_clicks = None
                 _pending_group_clicks = None
                 _pending_level_clicks = None
                 return {'PASS_THROUGH'}
-            if _click_names(context):
-                _, host = _button_hit(region, event.mouse_x, event.mouse_y)
-                try:
-                    area = next(a for a in context.window.screen.areas if region in a.regions[:])
-                    with context.temp_override(area=area, region=region):
+            try:
+                area = next(a for a in context.window.screen.areas if region in a.regions[:])
+                with context.temp_override(area=area, region=region):
+                    if _click_names(context):
+                        _, host = _button_hit(region, event.mouse_x, event.mouse_y)
                         if _handle_name_press(context, host, (region.as_pointer(), event.mouse_x, event.mouse_y)):
+                            self._back_press = None
                             return {'RUNNING_MODAL'}
-                except (ValueError, RuntimeError, ReferenceError):
-                    _pending_name_click = None
+                    if not (event.alt or event.oskey) and _click_objects(context) and self._back_click(context, event):
+                        return {'RUNNING_MODAL'}
+            except (ValueError, RuntimeError, ReferenceError):
+                _pending_name_click = None
         return {'PASS_THROUGH'}
 
+    def _back_click(self, context, event):
+        route = tuple(path(context))
+        last = getattr(self, "_back_press", None)
+        self._back_press = None
+        if not route:
+            return False
+        now = perf_counter()
+        region = context.region.as_pointer()
+        x, y = event.mouse_x, event.mouse_y
+        if event.value == 'DOUBLE_CLICK' or (
+                last and last[1:3] == (region, route) and now - last[0] <= _click_window(context)
+                and max(abs(x - last[3]), abs(y - last[4])) <= context.preferences.inputs.drag_threshold_mouse):
+            back_all = _double_click_back_all(context, event)
+            if back_all is not None:
+                return bpy.ops.groupmanager.back(all=back_all) == {'FINISHED'}
+        else:
+            self._back_press = (now, region, route, x, y)
+        return False
 
-def _empty_outside_group(context, event):
+
+def _double_click_back_all(context, event):
+    """Use the root frame to choose the exit level. Ignore hits inside the frame."""
     from bpy_extras import view3d_utils
     from .picking import _PickIndex
 
+    if _button_hit(context.region, event.mouse_x, event.mouse_y)[0]:
+        return None
     region = context.region
     view = region.data or context.region_data
-    host = path(context)[-1]
+    host = path(context)[0]
     xy = (event.mouse_x - region.x, event.mouse_y - region.y)
     cached_host, rect = _open_frame_rects.get(region.as_pointer(), (None, None))
     if cached_host != host:
         corners = _bound_corners(_shapes(context), host, hosts.definition(host))
         projected = [view3d_utils.location_3d_to_region_2d(region, view, point) for point in corners]
         rect = _screen_limits([point for point in projected if point is not None])
-    if rect and rect[0] <= xy[0] <= rect[2] and rect[1] <= xy[1] <= rect[3]:
-        return False
-    if _button_hit(region, event.mouse_x, event.mouse_y)[0]:
-        return False
+    if rect and not (rect[0] <= xy[0] <= rect[2] and rect[1] <= xy[1] <= rect[3]):
+        return True
     # Include selection-locked surfaces as well as wire and point objects.
     origin = view3d_utils.region_2d_to_origin_3d(region, view, xy)
     direction = view3d_utils.region_2d_to_vector_3d(region, view, xy)
     hit, _, _, _, obj, _ = context.scene.ray_cast(context.evaluated_depsgraph_get(), origin, direction)
-    if hit and obj.visible_get(view_layer=context.view_layer, viewport=context.space_data):
-        return False
+    if hit and not is_helper(obj) and obj.visible_get(view_layer=context.view_layer, viewport=context.space_data):
+        return None
     _, members = _PickIndex.from_view(context).at_cursor(region, view, event)
-    return not members
+    return None if members else False
 
 
 class GM_OT_back(bpy.types.Operator):
@@ -2849,8 +3043,10 @@ class GM_OT_back(bpy.types.Operator):
                     or not context.region or context.region.type != 'WINDOW'):
                 return {'PASS_THROUGH'}
             _pending_name_click = None
-            if not _empty_outside_group(context, event):
+            back_all = _double_click_back_all(context, event)
+            if back_all is None:
                 return {'PASS_THROUGH'}
+            self.all = self.all or back_all
         if event.shift:
             self.all = True
         return self.execute(context)
@@ -2980,21 +3176,38 @@ def _on_active_changed():
     _redraw()
 
 
+@persistent
+def _load_icon_font(_unused=None):
+    global _icon_font
+    if bpy.app.background:
+        return
+    import blf
+
+    # Opening a .blend can invalidate Blender's font IDs while the add-on stays enabled.
+    if _icon_font >= 0:
+        blf.size(_icon_font, 15)
+        if blf.dimensions(_icon_font, _collection_icon)[0] > 0:
+            return
+    _icon_font = blf.load(_icon_path)
+
+
 def register():
-    global _draw_handle, _icon_font
+    global _draw_handle
     _install_mode_pie()
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     for handlers in (bpy.app.handlers.save_pre, bpy.app.handlers.load_post):
         handlers.append(_close_editors)
+    bpy.app.handlers.load_post.append(_load_icon_font)
     bpy.app.handlers.depsgraph_update_post.append(_invalidate_bounds)
+    for handlers in (bpy.app.handlers.undo_pre, bpy.app.handlers.redo_pre, bpy.app.handlers.load_pre):
+        handlers.append(_drop_bounds)
     bpy.msgbus.subscribe_rna(key=(bpy.types.LayerObjects, "active"), owner=_msgbus_owner,
                              args=(), notify=_on_active_changed)
     bpy.msgbus.subscribe_rna(key=(bpy.types.Object, "mode"), owner=_msgbus_owner,
                              args=(), notify=_redirect_group_mode)
     if not bpy.app.background:
-        import blf
-        _icon_font = blf.load(_icon_path)
+        _load_icon_font()
         _draw_handle = bpy.types.SpaceView3D.draw_handler_add(_draw_bounds, (), 'WINDOW', 'POST_PIXEL')
 
 
@@ -3013,8 +3226,11 @@ def unregister():
         blf.unload(_icon_path)
         _icon_font = -1
     bpy.app.handlers.depsgraph_update_post.remove(_invalidate_bounds)
+    for handlers in (bpy.app.handlers.undo_pre, bpy.app.handlers.redo_pre, bpy.app.handlers.load_pre):
+        handlers.remove(_drop_bounds)
     for handlers in (bpy.app.handlers.save_pre, bpy.app.handlers.load_post):
         handlers.remove(_close_editors)
+    bpy.app.handlers.load_post.remove(_load_icon_font)
     _drop_bounds()
     _pick_frames.clear()
     _overlay_buttons.clear()

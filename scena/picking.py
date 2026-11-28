@@ -125,6 +125,25 @@ def _local_bounds(corners):
     return tuple(Vector(f(axis) for axis in zip(*corners)) for f in (min, max))
 
 
+def _surface_parts(geometry, _obj=None):
+    mesh = geometry.mesh if geometry is not None else None
+    if mesh is None or not mesh.polygons:
+        return []
+    mesh.calc_loop_triangles()
+    tree = BVHTree.FromPolygons([v.co for v in mesh.vertices],
+                                [tri.vertices[:] for tri in mesh.loop_triangles], all_triangles=True)
+    return [(tree, Matrix.Identity(4))]
+
+
+def _surface_distance(tree, matrix, origin, direction):
+    try:
+        inverse = matrix.inverted()
+    except ValueError:
+        return None
+    point, _, _, _ = tree.ray_cast(inverse @ origin, inverse.to_3x3() @ direction)
+    return (matrix @ point - origin).dot(direction) if point is not None else None
+
+
 class _PickIndex:
     @classmethod
     def from_view(cls, context):
@@ -149,15 +168,19 @@ class _PickIndex:
                 index._parents[obj] = by_host[host]
         return index
 
-    def __init__(self, objects, depsgraph, include_loose=False):
+    def __init__(self, objects, depsgraph, include_loose=False, *, modifier_surfaces=True):
         self._depsgraph = depsgraph
         self._shapes = {}
         self._geometry = {}
+        self._modifier_surfaces = modifier_surfaces
+        self._surface_boxes = {}
+        self._surfaces = {}
         self._parents = {}
         self._open_frames = {}
         self._roots = []
         self._loose = []
         self._root_spheres = None
+        self._loose_spheres = None
         for obj in objects:
             if editor.is_helper(obj) or obj.hide_select:
                 continue
@@ -167,18 +190,28 @@ class _PickIndex:
                 self._roots.append((obj, source, matrix))
             elif include_loose and not obj.hide_viewport:
                 evaluated = obj.evaluated_get(depsgraph)
-                bounds = _local_bounds([Vector(corner) for corner in evaluated.bound_box])
+                corners = evaluated.bound_box
+                low, high = corners[0], corners[6]
+                if tuple(low) == tuple(high) == (-1.0, -1.0, -1.0):
+                    low = high = (0.0, 0.0, 0.0)
+                bounds = Vector(low), Vector(high)
                 self._loose.append((obj, evaluated.matrix_world.copy(), bounds))
 
     def prepare_hover(self):
         """Build a broad phase once for the repeated rays of a modal Pick."""
-        if len(self._roots) < 64:
-            return
+        if len(self._roots) >= 64:
+            self._root_spheres = self._make_spheres(
+                (matrix, self._surface_bounds(obj) or self._shape(source, {source}).bounds)
+                for obj, source, matrix in self._roots)
+        if len(self._loose) >= 64:
+            self._loose_spheres = self._make_spheres((matrix, bounds) for _, matrix, bounds in self._loose)
+
+    @staticmethod
+    def _make_spheres(boxes):
         import numpy as np
 
         centers, radii = [], []
-        for _, source, matrix in self._roots:
-            low, high = self._shape(source, {source}).bounds
+        for matrix, (low, high) in boxes:
             center = matrix @ ((low + high) * 0.5)
             centers.append(tuple(center))
             # Sum of transformed half-axis lengths also bounds sheared boxes.
@@ -186,24 +219,57 @@ class _PickIndex:
             radius = sum(half[i] * matrix.col[i].to_3d().length for i in range(3))
             # Point markers have a screen-space pick radius at any zoom.
             radii.append(float('inf') if low == high else radius)
-        self._root_spheres = np.asarray(centers), np.asarray(radii)
+        return np.asarray(centers), np.asarray(radii)
 
-    def _ray_roots(self, origin, direction):
-        if self._root_spheres is None:
-            return self._roots
+    @staticmethod
+    def _ray_candidates(items, spheres, origin, direction):
+        if spheres is None:
+            return items
         import numpy as np
 
-        centers, radii = self._root_spheres
+        centers, radii = spheres
         relative = centers - origin[:]
         unit = direction.normalized()
         if not unit.length_squared:
-            return self._roots
+            return items
         perpendicular = np.cross(relative, unit[:])
         squared = np.einsum('ij,ij->i', perpendicular, perpendicular)
         # Leave room for float32 rounding in Blender's world transforms and rays.
         tolerance = 1e-5 * (1 + np.max(np.abs(relative), axis=1) + max(map(abs, origin)))
         indices = np.flatnonzero(squared <= (radii + tolerance) ** 2)
-        return (self._roots[i] for i in indices)
+        return (items[i] for i in indices)
+
+    def _surface_bounds(self, obj):
+        if not self._modifier_surfaces:
+            return None
+        if obj not in self._surface_boxes:
+            bounds = None
+            if hosts.has_viewport_modifiers(obj):
+                evaluated = obj.evaluated_get(self._depsgraph)
+                corners = evaluated.bound_box
+                geometry = evaluated.evaluated_geometry()
+                instances = geometry.instances_pointcloud()
+                if instances is not None and len(instances.points):
+                    # Object.bound_box can describe just the mesh component (zero for pure instances).
+                    corners, _ = editor._local_modifier_frame(obj, self._depsgraph)
+                bounds = _local_bounds(corners)
+            self._surface_boxes[obj] = bounds
+        return self._surface_boxes[obj]
+
+    def _surface_hit(self, obj, matrix, origin, direction):
+        if obj not in self._surfaces:
+            from . import frame_geometry
+            evaluated = obj.evaluated_get(self._depsgraph)
+            geometry = evaluated.evaluated_geometry()
+            instances = geometry.instances_pointcloud()
+            if evaluated.data.polygons and (instances is None or not len(instances.points)):
+                parts = [(BVHTree.FromObject(obj, self._depsgraph), Matrix.Identity(4))]
+            else:
+                parts = frame_geometry.geometry_parts(geometry, self._depsgraph, {obj}, _surface_parts)
+            self._surfaces[obj] = parts
+        return min((distance for tree, local in self._surfaces[obj]
+                    if (distance := _surface_distance(tree, matrix @ local, origin, direction)) is not None),
+                   default=None)
 
     def _shape(self, source, parents):
         if source in self._shapes:
@@ -227,7 +293,7 @@ class _PickIndex:
                     continue
                 nested = self._shape(child, parents | {child})
                 frame_depth = max(frame_depth, 1 + nested.frame_depth)
-                box = _corners(nested.bounds)
+                box = _corners(self._surface_bounds(obj) or nested.bounds)
                 if not obj.hide_select:
                     children.append((obj, child, matrix))
             else:
@@ -270,39 +336,62 @@ class _PickIndex:
             if tree is None:
                 distance = _screen_hit(origin, direction, matrix, vertices, edges, screen)
             else:
-                try:
-                    inverse = matrix.inverted()
-                except ValueError:
-                    return
-                point, _, _, _ = tree.ray_cast(inverse @ origin, inverse.to_3x3() @ direction)
-                distance = (matrix @ point - origin).dot(direction) if point is not None else None
+                distance = _surface_distance(tree, matrix, origin, direction)
             if distance is not None:
                 target = obj.get("_gm_mirror_of") or obj
                 members.append(_MemberHit(path, target, matrix, bounds, distance))
 
-        for obj, matrix, bounds in self._loose:
+        for obj, matrix, bounds in self._ray_candidates(self._loose, self._loose_spheres, origin, direction):
             consider(self._parents.get(obj, ()), obj, matrix, bounds)
 
-        def visit(path, source, matrix, seen):
+        def visit(path, obj, source, matrix, seen):
             shape = self._shape(source, seen)
-            distance = _box_distance(origin, direction, matrix, shape.bounds)
-            if distance is None and not (screen and shape.bounds[0] == shape.bounds[1]):
+            surface = self._surface_bounds(obj)
+            bounds = surface or shape.bounds
+            distance = _box_distance(origin, direction, matrix, bounds)
+            if distance is None and not (screen and bounds[0] == bounds[1]):
                 return
             start = len(members)
+            group_start = len(groups)
             if include_members:
-                for obj, local, bounds in shape.leaves:
-                    consider(path, obj, matrix @ local, bounds)
-            for obj, child, local in shape.children:
+                for leaf, local, leaf_bounds in shape.leaves:
+                    consider(path, leaf, matrix @ local, leaf_bounds)
+            for child_obj, child, local in shape.children:
                 if child not in seen:
-                    visit((*path, obj), child, matrix @ local, seen | {child})
+                    visit((*path, child_obj), child_obj, child, matrix @ local, seen | {child})
+            if include_members and surface is not None:
+                depth = self._surface_hit(obj, matrix, origin, direction)
+                if depth is not None:
+                    tolerance = max(1e-5, abs(depth) * 1e-6)
+                    # Surfaces removed by a boolean or moved by a deformer are no longer pickable.
+                    matched = []
+                    front_member = False
+                    for hit in members[start:]:
+                        if abs(hit.distance - depth) <= tolerance:
+                            front_member = True
+                            matched.append(hit)
+                        elif hit.distance > depth:
+                            # Preserve overlap cycling for member surfaces still present behind the first.
+                            probe = origin + direction * (hit.distance - 2 * tolerance)
+                            behind = self._surface_hit(obj, matrix, probe, direction)
+                            if behind is not None and abs(behind - 2 * tolerance) <= tolerance:
+                                matched.append(hit)
+                    if not front_member:
+                        matched.append(_MemberHit(path, path[-1], matrix, bounds, depth))
+                else:
+                    # Wire and point markers can be picked in screen space.
+                    matched = [h for h in members[start:] if h.obj in self._geometry and self._geometry[h.obj][0] is None]
+                members[start:] = matched
+                nested_paths = {h.path[:i] for h in matched for i in range(len(path) + 1, len(h.path) + 1)}
+                groups[group_start:] = [h for h in groups[group_start:] if h.path in nested_paths]
             if include_members:
                 distance = min((members[i].distance for i in range(start, len(members))), default=None)
             if distance is not None:
-                groups.append(_Hit(path, matrix, shape.bounds, distance))
+                groups.append(_Hit(path, matrix, bounds, distance))
 
-        for obj, source, matrix in self._ray_roots(origin, direction):
+        for obj, source, matrix in self._ray_candidates(self._roots, self._root_spheres, origin, direction):
             path = (*self._parents.get(obj, ()), obj.get("_gm_mirror_of") or obj)
-            visit(path, source, matrix, {source})
+            visit(path, obj, source, matrix, {source})
         if self._open_frames:
             distances = {}
             for member in members:
@@ -384,7 +473,7 @@ class PickFrames:
         return True
 
     def draw_missing(self, context, style, labels):
-        if self.member and self.group:
+        if self.member and self.group and self.member != self.group:
             labels.parents.setdefault(self.member, self.group)
         for host, (matrix, corners) in self.targets.items():
             if host in self.drawn:
@@ -534,7 +623,10 @@ class GROUPMANAGER_OT_pick(bpy.types.Operator):
                 used += hint_width
             lines.append((runs, used))
         if self._member:
-            path = [obj.name for obj in (*self._member.path, self._member.obj)]
+            chain = self._member.path
+            if not chain or chain[-1] != self._member.obj:
+                chain = (*chain, self._member.obj)
+            path = [obj.name for obj in chain]
             suffix = f"   [{self._choice + 1}/{len(self._options)}]" if len(self._options) > 1 else ""
             label = ' › '.join(path) + suffix
             while len(path) > 1 and blf.dimensions(0, label)[0] > width:
@@ -665,6 +757,8 @@ class GROUPMANAGER_OT_pick(bpy.types.Operator):
 
 def _select_picked(context, groups, obj):
     """Open every group around this object, then select the object itself."""
+    if groups and groups[-1] == obj:
+        groups = groups[:-1]
     if groups != tuple(editor.path(context)):
         if groups:
             editor.close_peers(context)
@@ -688,7 +782,7 @@ def _navigate_hit(operator, context, member, deep):
             editor.back(context, all_levels=True)
         elif member and member.path:
             if deep or route == member.path:
-                _select_picked(context, member.path, member.obj)
+                destination = member.path
             else:
                 common = 0
                 for current, target in zip(route, member.path):
@@ -696,8 +790,12 @@ def _navigate_hit(operator, context, member, deep):
                         break
                     common += 1
                 destination = member.path[:common + 1]
-                child = member.path[len(destination)] if len(destination) < len(member.path) else member.obj
+            child = member.path[len(destination)] if len(destination) < len(member.path) else member.obj
+            if child != destination[-1]:
                 _select_picked(context, destination, child)
+            elif route != destination:
+                editor.close_peers(context)
+                editor.open_path(context, destination)
         elif route:
             editor.back(context, all_levels=deep)
         else:
@@ -743,7 +841,7 @@ class GROUPMANAGER_OT_select_front_member(bpy.types.Operator):
 class GROUPMANAGER_OT_deep_edit(bpy.types.Operator):
     bl_idname = "groupmanager.deep_edit"
     bl_label = "Navigate Group"
-    bl_description = "Ctrl-click to enter one group or go back one level. Ctrl-double-click to reach the deepest member or exit all levels"
+    bl_description = "Ctrl-double-click to enter one group. Outside the current group, Ctrl-click goes back one level and Ctrl-double-click exits all levels"
     bl_options = {'UNDO'}
     deep: bpy.props.BoolProperty(name="Deepest Level", default=True)
 
@@ -760,16 +858,16 @@ class GROUPMANAGER_OT_deep_edit(bpy.types.Operator):
         _, members = index.at_cursor(region, region.data or context.region_data, event)
         route = tuple(editor.path(context))
         member = members[0] if members else None
-        if self.deep:
+        if event.value == 'DOUBLE_CLICK' or self.deep:
             if not route and not (member and member.path):
                 return {'PASS_THROUGH'}
-            return _navigate_hit(self, context, member, True)
+            return self._double_click(context, route, member)
         if not route and not (member and member.path):
-            if member:
+            if member and not member.path:
                 editor._select(context.view_layer, member.obj)
                 return {'FINISHED'}
             return {'PASS_THROUGH'}
-        # Both gestures must start from the hierarchy under the first click.
+        # Keep the first target until the double-click window expires.
         self._route = route
         self._member = member
         self._position = Vector((event.mouse_x, event.mouse_y))
@@ -781,6 +879,10 @@ class GROUPMANAGER_OT_deep_edit(bpy.types.Operator):
     def cancel(self, context):
         context.window_manager.event_timer_remove(self._timer)
 
+    def _double_click(self, context, route, member):
+        outside = bool(route and (not member or member.path[:len(route)] != route))
+        return _navigate_hit(self, context, member, self.deep or outside)
+
     def modal(self, context, event):
         if event.type in {'ESC', 'WINDOW_DEACTIVATE'} or tuple(editor.path(context)) != self._route:
             self.cancel(context)
@@ -791,14 +893,13 @@ class GROUPMANAGER_OT_deep_edit(bpy.types.Operator):
                     and monotonic() <= self._deadline and editor._view3d_under_mouse(event) == context.region
                     and (pos - self._position).length <= context.preferences.inputs.drag_threshold_mouse):
                 self.cancel(context)
-                return _navigate_hit(self, context, self._member, True)
+                return self._double_click(context, self._route, self._member)
         elif event.type != 'TIMER' or monotonic() < self._deadline:
             return {'PASS_THROUGH'}
         self.cancel(context)
         member = self._member
-        if member and (member.path == self._route or member.path[:len(self._route)] != self._route):
-            member = None
-        result = _navigate_hit(self, context, member, False)
+        entering = member and member.path[:len(self._route)] == self._route and len(member.path) > len(self._route)
+        result = _navigate_hit(self, context, None, False) if self._route and not entering else {'CANCELLED'}
         return result if event.type == 'TIMER' else result | {'PASS_THROUGH'}
 
 

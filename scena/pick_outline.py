@@ -3,6 +3,7 @@
 import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
+from mathutils import Matrix
 
 
 COLOR = (0.30, 0.95, 0.40, 1.0)
@@ -46,30 +47,40 @@ def _edge_shader():
     return gpu.shader.create_from_info(info)
 
 
-def _geometry(obj, shader):
+def _mesh_batch(mesh, shader):
+    if mesh is None or not mesh.vertices:
+        return None
+    coords = np.empty((len(mesh.vertices), 3), dtype=np.float32)
+    mesh.vertices.foreach_get("co", coords.ravel())
+    mesh.calc_loop_triangles()
+    if mesh.loop_triangles:
+        primitive, elements, width = 'TRIS', mesh.loop_triangles, 3
+    elif mesh.edges:
+        primitive, elements, width = 'LINES', mesh.edges, 2
+    else:
+        return batch_for_shader(shader, 'POINTS', {"pos": coords})
+    indices = np.empty((len(elements), width), dtype=np.int32)
+    elements.foreach_get("vertices", indices.ravel())
+    return batch_for_shader(shader, primitive, {"pos": coords}, indices=indices)
+
+
+def _batches(obj, depsgraph, shader):
     if obj.type not in MESH_TYPES:
-        return None
-    mesh = obj.data if obj.type == 'MESH' else obj.to_mesh()
-    if mesh is None:
-        return None
+        return []
+    identity = Matrix.Identity(4)
+    if obj.type == 'MESH':
+        from . import frame_geometry
+
+        def read(geometry, _object=None):
+            batch = _mesh_batch(geometry.mesh, shader) if geometry is not None else None
+            return [(batch, identity)] if batch is not None else []
+
+        return frame_geometry.geometry_parts(obj.evaluated_geometry(), depsgraph, {obj.original}, read)
     try:
-        if not mesh.vertices:
-            return None
-        coords = np.empty((len(mesh.vertices), 3), dtype=np.float32)
-        mesh.vertices.foreach_get("co", coords.ravel())
-        mesh.calc_loop_triangles()
-        if mesh.loop_triangles:
-            primitive, elements, width = 'TRIS', mesh.loop_triangles, 3
-        elif mesh.edges:
-            primitive, elements, width = 'LINES', mesh.edges, 2
-        else:
-            return batch_for_shader(shader, 'POINTS', {"pos": coords})
-        indices = np.empty((len(elements), width), dtype=np.int32)
-        elements.foreach_get("vertices", indices.ravel())
-        return batch_for_shader(shader, primitive, {"pos": coords}, indices=indices)
+        batch = _mesh_batch(obj.to_mesh(), shader)
+        return [(batch, identity)] if batch is not None else []
     finally:
-        if obj.type != 'MESH':
-            obj.to_mesh_clear()
+        obj.to_mesh_clear()
 
 
 class PickOutline:
@@ -82,9 +93,9 @@ class PickOutline:
 
     def draw(self, obj, depsgraph, matrix, projection, size, width):
         if obj != self.obj:
-            self.batch = _geometry(obj.evaluated_get(depsgraph), self.solid)
+            self.batches = _batches(obj.evaluated_get(depsgraph), depsgraph, self.solid)
             self.obj = obj
-        if self.batch is None:
+        if not self.batches:
             return False
         if size != self.size:
             self.mask = gpu.types.GPUTexture(size, format='R8')
@@ -102,10 +113,11 @@ class PickOutline:
                 self.frame.clear(color=(0, 0, 0, 0))
                 with gpu.matrix.push_pop(), gpu.matrix.push_pop_projection():
                     gpu.matrix.load_projection_matrix(projection)
-                    gpu.matrix.load_matrix(matrix)
                     self.solid.bind()
                     self.solid.uniform_float("color", (1, 1, 1, 1))
-                    self.batch.draw(self.solid)
+                    for batch, local in self.batches:
+                        gpu.matrix.load_matrix(matrix @ local)
+                        batch.draw(self.solid)
             gpu.state.viewport_set(*viewport)
             gpu.state.scissor_set(*scissor)
             gpu.state.blend_set('ALPHA')

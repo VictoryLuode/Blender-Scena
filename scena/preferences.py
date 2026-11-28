@@ -1,9 +1,9 @@
 """User-wide defaults and display preferences for Scena."""
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, PointerProperty, StringProperty
 
-from . import creation, hotkeys
+from . import creation, edit_layer, hotkeys
 
 
 BOUNDS_COLOR = (0.18, 0.72, 0.57)
@@ -11,6 +11,10 @@ BOUNDS_WIDTH = 1.25
 BOUNDS_2D_FIT = 'GROUP'
 BOUNDS_HIERARCHY_GAP = 2.5
 BOUNDS_CORNER = 12.0
+PREVIEW_DISPLAYS = (
+    ('WIRE', "Wireframe", "Display the modifier result as edges", 0),
+    ('SOLID', "Solid", "Display the faces of the modifier result", 1),
+)
 _BOX_SHAPES = (
     ('FRAME', "Outline", "Draw the whole box"),
     ('CORNERS', "Corners", "Draw only the corners"),
@@ -44,6 +48,11 @@ def get(context):
     return addon.preferences if addon else None
 
 
+def preview_settings(context):
+    prefs = get(context)
+    return prefs.modifier_preview if prefs is not None else getattr(context.window_manager, "gm_modifier_preview", None)
+
+
 def _redraw_viewports(self, context):
     for window in context.window_manager.windows:
         for area in window.screen.areas:
@@ -67,13 +76,22 @@ def _read_category(self, value, is_set):
     return 1 if value == 3 else value
 
 
+class SCENA_PG_modifier_preview(bpy.types.PropertyGroup):
+    # Existing profiles supply the default when a placement graph first gains the preview socket.
+    enabled: BoolProperty(name="Modifier Preview", description="Show modifier copies while editing a group",
+                          default=True, options={'HIDDEN'}, update=edit_layer.update_modifier_previews)
+    display: EnumProperty(name="Display", description="How to draw the modifier preview",
+                          items=PREVIEW_DISPLAYS, default='WIRE', options=set(), update=edit_layer.update_modifier_previews)
+
+
 class GROUPMANAGER_Preferences(bpy.types.AddonPreferences):
     bl_idname = __package__
 
+    modifier_preview: PointerProperty(type=SCENA_PG_modifier_preview)
     settings: EnumProperty(name="Category",
                            description="Which group of settings to show",
                            items=(('GROUP', "Group", "Create a group and move through it", 1),
-                                  ('DISPLAY', "Display", "Viewport frames", 2),
+                                  ('DISPLAY', "Display", "Viewport frames and modifier previews", 2),
                                   ('TOOL', "Tool", "Optional extra tools", 0)),
                            default='GROUP', get_transform=_read_category)
     use_cursor_origin: BoolProperty(name="Cursor and Origin",
@@ -128,9 +146,6 @@ class GROUPMANAGER_Preferences(bpy.types.AddonPreferences):
                                     precision=1, step=10, subtype='PIXEL',
                                     description="Length of each 2D corner, in pixels",
                                     update=_redraw_viewports)
-    show_edit_header: BoolProperty(name="Edit Path",
-                                   description="Show the group path, shared count, and back button in the viewport header",
-                                   default=True, update=_redraw_viewports)
     click_names: BoolProperty(name="Click Names",
                               description="Click a viewport name to select it; double-click to enter its level",
                               default=True)
@@ -163,7 +178,7 @@ class GROUPMANAGER_Preferences(bpy.types.AddonPreferences):
         if self.settings == 'GROUP':
             self.draw_group(box, context)
         elif self.settings == 'DISPLAY':
-            self.draw_display(box)
+            self.draw_display(box, context)
         else:
             self.draw_tool(box, context)
 
@@ -189,12 +204,15 @@ class GROUPMANAGER_Preferences(bpy.types.AddonPreferences):
         navigation.label(text="Navigate", icon='VIEW3D')
         fields = navigation.column()
         fields.use_property_split = True
-        fields.prop(self, "show_edit_header")
         fields.prop(self, "click_names")
         fields.prop(self, "click_objects")
         hotkeys.draw_group_shortcuts(layout, context)
 
-    def draw_display(self, layout):
+    def draw_display(self, layout, context):
+        preview = layout.box().column()
+        preview.use_property_split = True
+        preview.prop(self.modifier_preview, "display", text="Modifier Preview Display")
+
         frame = layout.box()
         frame.label(text="Frame", icon='OUTLINER_COLLECTION')
         fields = frame.column()
@@ -231,4 +249,4 @@ class GROUPMANAGER_Preferences(bpy.types.AddonPreferences):
         for index, attr in enumerate(entries):
             columns[index % 2].prop(self, attr)
 
-CLASSES = (GROUPMANAGER_Preferences,)
+CLASSES = (SCENA_PG_modifier_preview, GROUPMANAGER_Preferences)

@@ -6,6 +6,8 @@ DEFINITION_KEY = "_gm_definition"
 GRAPH_KEY = "_gm_placement_graph"
 SOURCE_SOCKET = "_gm_source_socket"
 REALIZE_SOCKET = "_gm_realize_socket"
+FRAME_SOCKET = "_scena_frame_modifiers_socket"
+PREVIEW_SOCKET = "_scena_modifier_preview_socket"
 DEFINITION_PREFIX = "Group_"
 GRAPH_NAME = "Scena Group"
 MODIFIER_NAME = "Scena Group"
@@ -148,8 +150,73 @@ def _upgrade_output(tree):
         _socket(mod, REALIZE_SOCKET).value = True
 
 
+def _display_socket(tree, key, name, description, *, after, default, output_name):
+    identifier = tree.get(key)
+    if identifier and tree.interface.items_tree.get(identifier) is not None:
+        return
+    socket = tree.interface.new_socket(name=name, in_out='INPUT', socket_type='NodeSocketBool')
+    socket.description = description
+    socket.structure_type = 'SINGLE'
+    socket.default_value = default
+    previous = tree.interface.items_tree[tree[after]]
+    tree.interface.move(socket, previous.position + 1)
+    # Pass the UI setting through a hidden value output. Blender dims unused
+    # inputs in the modifier panel. The geometry output stays independent.
+    inputs = next((n for n in tree.nodes if n.type == 'GROUP_INPUT'), None)
+    output = next((n for n in tree.nodes if n.type == 'GROUP_OUTPUT' and n.is_active_output), None)
+    if inputs and output:
+        setting = next((s for s in tree.interface.items_tree if s.item_type == 'SOCKET'
+                        and s.in_out == 'OUTPUT' and s.name == output_name), None)
+        if setting is None:
+            setting = tree.interface.new_socket(name=output_name, in_out='OUTPUT', socket_type='NodeSocketBool')
+            setting.structure_type = 'SINGLE'
+            setting.hide_in_modifier = True
+        tree.links.new(inputs.outputs[socket.identifier], output.inputs[setting.identifier])
+        inputs.outputs[socket.identifier].hide = True
+        output.inputs[setting.identifier].hide = True
+    tree[key] = socket.identifier
+    if default and tree.users:
+        # Blender adds an initially false Boolean to existing modifiers before
+        # applying the interface default used for future placements.
+        for obj in bpy.data.user_map(subset={tree}).get(tree, ()):
+            if isinstance(obj, bpy.types.Object) and not obj.library and not obj.override_library:
+                for modifier in obj.modifiers:
+                    if modifier.type == 'NODES' and modifier.node_group == tree:
+                        _socket(modifier, key).value = True
+
+
+def _ensure_display_sockets(tree):
+    if tree.library or tree.override_library:
+        return
+    from . import preferences
+    settings = preferences.preview_settings(bpy.context)
+    _display_socket(tree, FRAME_SOCKET, "Frame with Modifiers",
+                    "Fit this placement's viewport frame to the result of its modifier stack",
+                    after=REALIZE_SOCKET, default=False, output_name="Frame Setting")
+    _display_socket(tree, PREVIEW_SOCKET, "Modifier Preview",
+                    "Show this placement's modifier copies while editing the group",
+                    after=FRAME_SOCKET, default=getattr(settings, "enabled", True), output_name="Preview Setting")
+
+
+def display_input(obj, key):
+    modifier = _source_modifier(obj)
+    identifier = modifier.node_group.get(key) if modifier else None
+    return getattr(modifier.properties.inputs, identifier, None) if identifier else None
+
+
+def frame_includes_modifiers(obj):
+    entry = display_input(obj, FRAME_SOCKET)
+    return bool(entry and entry.value)
+
+
+def has_viewport_modifiers(obj):
+    generator = _source_modifier(obj)
+    return generator is not None and any(mod != generator and mod.show_viewport for mod in obj.modifiers)
+
+
 def _name_graph(tree):
     _upgrade_output(tree)
+    _ensure_display_sockets(tree)
     version = tree.get("_scena_node_layout", 0)
     if version >= 2:
         return
@@ -518,13 +585,19 @@ def _stand_in_for_type_dependents(obj):
     if not bindings:
         return None
     empty = bpy.data.objects.new(f"{obj.name}_GM_Target", None)
-    empty.empty_display_type = 'PLAIN_AXES'
-    empty.empty_display_size = 0.25
-    for collection in obj.users_collection or (bpy.context.scene.collection,):
-        collection.objects.link(empty)
-    empty.matrix_world = obj.matrix_world.copy()
-    for modifier, identifier in bindings:
-        _set_pointer(modifier, identifier, empty)
+    applied = []
+    try:
+        empty.empty_display_type = 'PLAIN_AXES'
+        empty.empty_display_size = 0.25
+        for collection in obj.users_collection or (bpy.context.scene.collection,):
+            collection.objects.link(empty)
+        empty.matrix_world = obj.matrix_world.copy()
+        for modifier, identifier in bindings:
+            _set_pointer(modifier, identifier, empty)
+            applied.append((modifier, identifier))
+    except Exception:
+        _discard_stand_in((empty, applied), obj)
+        raise
     return empty, bindings
 
 
@@ -549,54 +622,93 @@ def _parent_keep_world(child, parent):
 
 def switch_host(obj, kind):
     """Replace the carrier and remap its users as a single undoable caller operation."""
-    check_switch(obj, kind)
-    if host_type(obj) == kind:
-        return obj
-    stand_in = _stand_in_for_type_dependents(obj)
-    try:
-        return _switch_host(obj, kind, stand_in)
-    except Exception:
-        _discard_stand_in(stand_in, obj)
-        raise
+    with HostSwitches() as switches:
+        return switches.convert(obj, kind)
 
 
-def _switch_host(obj, kind, stand_in):
-    old_name = obj.name
-    layers = [
-        (layer, obj.select_get(view_layer=layer), obj.hide_get(view_layer=layer), layer.objects.active == obj)
-        for scene in obj.users_scene for layer in scene.view_layers if layer.objects.get(old_name) == obj
-    ]
-    local_views = [
-        (area.spaces.active, obj.local_view_get(area.spaces.active))
-        for wm in bpy.data.window_managers for window in wm.windows
-        if window.view_layer.objects.get(old_name) == obj
-        for area in window.screen.areas
-        if area.type == 'VIEW_3D' and area.spaces.active.local_view
-    ]
-    target = make_host(old_name, definition(obj), kind)
-    remapped = False
-    try:
-        _copy_settings(obj, target)
-        obj.user_remap(target)
-        remapped = True
-        obj.name = ".Scena replaced"
-        target.name = old_name
-        for layer, selected, hidden, active in layers:
+class _HostSwitch:
+    def __init__(self, original):
+        self.original = original
+        self.name = original.name
+        self.target = self.stand_in = None
+        self.remapped = False
+        self.layers = [
+            (layer, original.select_get(view_layer=layer), original.hide_get(view_layer=layer),
+             layer.objects.active == original)
+            for scene in original.users_scene for layer in scene.view_layers
+            if layer.objects.get(self.name) == original
+        ]
+        self.local_views = [
+            (area.spaces.active, original.local_view_get(area.spaces.active))
+            for wm in bpy.data.window_managers for window in wm.windows
+            if window.view_layer.objects.get(self.name) == original
+            for area in window.screen.areas
+            if area.type == 'VIEW_3D' and area.spaces.active.local_view
+        ]
+
+    def _restore_view(self, obj):
+        for layer, selected, hidden, active in self.layers:
             layer.update()
-            if layer.objects.get(old_name) == target:
-                target.hide_set(hidden, view_layer=layer)
-                target.select_set(selected, view_layer=layer)
+            if layer.objects.get(self.name) == obj:
+                obj.hide_set(hidden, view_layer=layer)
+                obj.select_set(selected, view_layer=layer)
                 if active:
-                    layer.objects.active = target
-        for space, included in local_views:
-            target.local_view_set(space, included)
-    except Exception:
-        if remapped:
-            target.user_remap(obj)
-        _remove_host(target)
-        obj.name = old_name
-        raise
-    _remove_host(obj)
-    if stand_in:
-        _parent_keep_world(stand_in[0], target)
-    return target
+                    layer.objects.active = obj
+        for space, included in self.local_views:
+            obj.local_view_set(space, included)
+
+    def convert(self, kind):
+        self.stand_in = _stand_in_for_type_dependents(self.original)
+        self.target = make_host(self.name, definition(self.original), kind)
+        _copy_settings(self.original, self.target)
+        self.original.user_remap(self.target)
+        self.remapped = True
+        self.original.name = ".Scena replaced"
+        self.target.name = self.name
+        self._restore_view(self.target)
+        if self.stand_in:
+            _parent_keep_world(self.stand_in[0], self.target)
+        return self.target
+
+    def rollback(self):
+        if self.remapped:
+            self.target.user_remap(self.original)
+        _discard_stand_in(self.stand_in, self.original)
+        if self.target is not None:
+            _remove_host(self.target)
+        if self.remapped:
+            self.original.name = self.name
+            self._restore_view(self.original)
+
+
+class HostSwitches:
+    """Retain original carriers and their references until every switch succeeds."""
+
+    def __init__(self):
+        self.changes = []
+        self.placement_graphs = None
+
+    def __enter__(self):
+        return self
+
+    def convert(self, obj, kind):
+        check_switch(obj, kind)
+        if host_type(obj) == kind:
+            return obj
+        if kind == 'NODES' and self.placement_graphs is None:
+            self.placement_graphs = {tree for tree in bpy.data.node_groups if tree.get(GRAPH_KEY) == 1}
+        change = _HostSwitch(obj)
+        self.changes.append(change)
+        return change.convert(kind)
+
+    def __exit__(self, error, value, trace):
+        if error is None:
+            for change in self.changes:
+                _remove_host(change.original)
+        else:
+            for change in reversed(self.changes):
+                change.rollback()
+            if self.placement_graphs is not None:
+                for tree in list(bpy.data.node_groups):
+                    if not tree.users and tree.get(GRAPH_KEY) == 1 and tree not in self.placement_graphs:
+                        bpy.data.node_groups.remove(tree)
