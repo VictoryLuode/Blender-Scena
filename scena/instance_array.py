@@ -48,8 +48,14 @@ def _signature(slots):
 
 
 def needs_sync(obj):
-    return (obj.type == 'MESH' and obj.mode == 'OBJECT' and not obj.library and not obj.override_library
-            and _signature(_slots(obj)) != obj.get(BINDINGS, ''))
+    if obj.type != 'MESH' or obj.mode != 'OBJECT' or obj.library or obj.override_library:
+        return False
+    bound = obj.get(BINDINGS, '')
+    if _signature(_slots(obj)) == bound:
+        return False
+    # A new Array already works natively on realized meshes. Defer setting up
+    # instance controls until needed, but keep existing driver bindings current.
+    return bool(bound) or not hosts._mesh_output(obj.modifiers[0])
 
 
 def _build(tree):
@@ -164,18 +170,14 @@ def sync(obj):
     if not source:
         obj.pop(BINDINGS, None)
         return
+    if slots:
+        mirror._ensure_stages(source, [slot for slot, _ in slots])
     _unbind(source, [item.split(':')[0] for item in old.split('|') if item])
     obj.pop(BINDINGS, None)
     if slots:
-        mirror._embed(source, mirror._graph())
-        kernel = _kernel()
-        mirror_node = next(n for n in source.node_group.nodes
-                           if n.type == 'GROUP' and n.node_tree and n.node_tree.get(mirror.GRAPH))
         try:
             for slot, mod in slots:
                 prefix = slot + ' '
-                before = mirror_node if slot.startswith('Array Before') else None
-                mirror._embed(source, kernel, marker=slot, prefix=prefix, before=before)
                 for name, (kind, prop) in FIELDS.items():
                     entry = mirror._entry(source, prefix + name)
                     for index in range(3) if kind == 'Vector' else (None,):

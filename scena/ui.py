@@ -1,11 +1,8 @@
-from functools import wraps
-from types import SimpleNamespace
-
 import blf
 import bpy
 from bpy.props import BoolProperty, EnumProperty, PointerProperty
 
-from . import creation, editor, hosts, modeling, operations, preferences, usage
+from . import creation, editor, hosts, menu_hooks, modeling, operations, preferences, usage
 
 
 class Sidebar:
@@ -349,41 +346,8 @@ def switch_type_buttons(layout, context):
         row.operator("groupmanager.switch_type", text=label, icon=icon).kind = target
 
 
-class GROUPMANAGER_PT_group_data(ObjectProperties, bpy.types.Panel):
-    bl_idname = "GROUPMANAGER_PT_group_data"
-    bl_label = "Group Data"
-
-    @classmethod
-    def poll(cls, context):
-        return hosts.definition(context.object) is not None
-
-    def draw(self, context):
-        group = context.object
-        row = self.layout.row(align=True)
-        row.use_property_split = False
-        _draw_group_data(row, context, group, hosts.definition(group))
-
-
-def _add_menu(self, context):
-    if context.mode == 'OBJECT':
-        self.layout.operator("groupmanager.add_group", text="Group", icon='OUTLINER_COLLECTION')
-
-
-class _AddMenuLayout:
+class _AddMenuLayout(menu_hooks.Layout):
     """Forward the native Add menu and insert Group immediately after Mesh."""
-    def __init__(self, layout):
-        self._layout = layout
-
-    def __getattr__(self, name):
-        return getattr(self._layout, name)
-
-    @property
-    def operator_context(self):
-        return self._layout.operator_context
-
-    @operator_context.setter
-    def operator_context(self, value):
-        self._layout.operator_context = value
 
     def menu(self, menu, *args, **kwargs):
         result = self._layout.menu(menu, *args, **kwargs)
@@ -397,20 +361,9 @@ _add_menu_hook = None
 
 def _install_add_menu():
     global _add_menu_hook
-    menu = bpy.types.VIEW3D_MT_add
-    callbacks = menu._dyn_ui_initialize()
-    for index, original in enumerate(callbacks):
-        if original.__module__ == "bl_ui.space_view3d" and original.__qualname__ == "VIEW3D_MT_add.draw":
-            @wraps(original)
-            def draw(self, context):
-                if context.mode == 'OBJECT':
-                    self = SimpleNamespace(layout=_AddMenuLayout(self.layout))
-                return original(self, context)
-
-            callbacks[index] = draw
-            _add_menu_hook = (callbacks, draw, original)
-            return
-    menu.append(_add_menu)
+    _add_menu_hook = menu_hooks.install(
+        bpy.types.VIEW3D_MT_add, _AddMenuLayout, lambda context: context.mode == 'OBJECT',
+    )
 
 
 class GROUPMANAGER_PT_current(Sidebar, bpy.types.Panel):
@@ -610,7 +563,7 @@ class GROUPMANAGER_OT_quick(bpy.types.Operator):
         return bpy.ops.wm.call_menu_pie(name="GROUPMANAGER_MT_quick")
 
 
-CLASSES = (SCENA_PT_overlay_frame, SCENA_MT_group_data, SCENA_MT_duplicate, SCENA_MT_group_operations, GROUPMANAGER_PT_group_data, GROUPMANAGER_PT_current, GROUPMANAGER_PT_info,
+CLASSES = (SCENA_PT_overlay_frame, SCENA_MT_group_data, SCENA_MT_duplicate, SCENA_MT_group_operations, GROUPMANAGER_PT_current, GROUPMANAGER_PT_info,
            SCENA_PT_visibility_display, SCENA_PT_duplicate_choices, SCENA_PT_group_operations, GROUPMANAGER_PT_info_light,
            GROUPMANAGER_PT_object, GROUPMANAGER_PT_object_info,
            GROUPMANAGER_PT_object_info_light,
@@ -687,13 +640,8 @@ def register():
 
 def unregister():
     global _add_menu_hook
-    if _add_menu_hook:
-        callbacks, draw, original = _add_menu_hook
-        if draw in callbacks:
-            callbacks[callbacks.index(draw)] = original
-        _add_menu_hook = None
-    else:
-        bpy.types.VIEW3D_MT_add.remove(_add_menu)
+    menu_hooks.restore(_add_menu_hook)
+    _add_menu_hook = None
     del bpy.types.WindowManager.gm_modifier_preview_mode
     del bpy.types.WindowManager.gm_modifier_preview
     del bpy.types.WindowManager.gm_keep_group_modifiers

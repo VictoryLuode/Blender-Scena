@@ -9,7 +9,7 @@ import bpy
 from bpy.app.handlers import persistent
 from bpy.props import IntProperty, StringProperty
 
-from . import editor, hosts
+from . import editor, hosts, menu_hooks
 
 
 def _authored_scene_objects(scene, opened):
@@ -388,48 +388,24 @@ class GROUPMANAGER_MT_select_linked(bpy.types.Menu):
         layout.operator(GM_OT_select_linked_group.bl_idname, text="Group")
 
 
-def _draw_grouped_entry(menu, context):
-    menu.layout.operator(GM_OT_select_grouped_kind.bl_idname, text="Group")
+class _SelectLayout(menu_hooks.Layout):
+    def operator_menu_enum(self, operator, prop, *args, **kwargs):
+        if prop == "type" and operator == "object.select_grouped":
+            return self._layout.menu(GROUPMANAGER_MT_select_grouped.bl_idname, *args, **kwargs)
+        if prop == "type" and operator == "object.select_linked":
+            return self._layout.menu(GROUPMANAGER_MT_select_linked.bl_idname, *args, **kwargs)
+        return self._layout.operator_menu_enum(operator, prop, *args, **kwargs)
 
 
-def _draw_select_object(self, _context):
-    layout = self.layout
-    layout.operator("object.select_all", text="All").action = 'SELECT'
-    layout.operator("object.select_all", text="None").action = 'DESELECT'
-    layout.operator("object.select_all", text="Invert").action = 'INVERT'
-    layout.separator()
-    layout.operator("view3d.select_box")
-    layout.operator("view3d.select_circle")
-    layout.operator_menu_enum("view3d.select_lasso", "mode")
-    layout.separator()
-    layout.operator("object.select_camera", text="Select Active Camera")
-    layout.operator("object.select_mirror")
-    layout.operator("object.select_random", text="Select Random")
-    layout.separator()
-    layout.menu("VIEW3D_MT_select_object_more_less", text="More/Less")
-    layout.separator()
-    layout.operator_menu_enum("object.select_by_type", "type", text="Select All by Type")
-    layout.menu(GROUPMANAGER_MT_select_grouped.bl_idname, text="Select Grouped")
-    layout.menu(GROUPMANAGER_MT_select_linked.bl_idname, text="Select Linked")
-    layout.operator("object.select_pattern", text="Select Pattern...")
-
-
-_original_select_draw = None
-_grouped_hooked = False
+_select_menu_hook = None
 _linked_binding = None
 _menus_live = False
 
 
 def _hook_selection_menus():
-    global _original_select_draw, _grouped_hooked, _linked_binding
-    menu = bpy.types.VIEW3D_MT_select_object
-    if menu.draw is not _draw_select_object:
-        _original_select_draw = menu.draw
-        menu.draw = _draw_select_object
-    hops = getattr(bpy.types, "HOPS_MT_SelectGrouped", None)
-    if hops is not None and not _grouped_hooked:
-        hops.append(_draw_grouped_entry)
-        _grouped_hooked = True
+    global _select_menu_hook, _linked_binding
+    if _select_menu_hook is None:
+        _select_menu_hook = menu_hooks.install(bpy.types.VIEW3D_MT_select_object, _SelectLayout)
     config = bpy.context.window_manager.keyconfigs.addon if bpy.context.window_manager else None
     if config is not None and _linked_binding is None:
         keymap = config.keymaps.new(name="Object Mode", space_type='EMPTY', region_type='WINDOW')
@@ -439,15 +415,9 @@ def _hook_selection_menus():
 
 
 def _unhook_selection_menus():
-    global _original_select_draw, _grouped_hooked, _linked_binding
-    menu = getattr(bpy.types, "VIEW3D_MT_select_object", None)
-    if menu is not None and menu.draw is _draw_select_object and _original_select_draw is not None:
-        menu.draw = _original_select_draw
-    _original_select_draw = None
-    hops = getattr(bpy.types, "HOPS_MT_SelectGrouped", None)
-    if hops is not None and _grouped_hooked:
-        hops.remove(_draw_grouped_entry)
-    _grouped_hooked = False
+    global _select_menu_hook, _linked_binding
+    menu_hooks.restore(_select_menu_hook)
+    _select_menu_hook = None
     if _linked_binding is not None:
         keymap, item = _linked_binding
         keymap.keymap_items.remove(item)

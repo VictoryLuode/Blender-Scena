@@ -2879,16 +2879,10 @@ class _GroupModeLayout(menu_hooks.Layout):
             self._layout.operator("groupmanager.set_mode", text=text, icon=item.icon).mode = identifier
 
 
-def _geo_scatter_mode_draw(draw):
-    return (draw.__module__.endswith(".geo_scatter.gpl_script.ui.ui_pie")
-            and draw.__name__ == "new_object_mode_pie_draw")
-
-
 def _install_mode_pie():
     global _mode_pie_draw
     _mode_pie_draw = menu_hooks.install(
         bpy.types.VIEW3D_MT_object_mode_pie, _GroupModeLayout, _mode_targets,
-        compatible_draw=_geo_scatter_mode_draw,
     )
 
 

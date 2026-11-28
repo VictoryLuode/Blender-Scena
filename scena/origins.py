@@ -1,12 +1,9 @@
 """Use the Object menus' Set Origin commands on Scena's shared collection data."""
 
-from functools import wraps
-from types import SimpleNamespace
-
 import bpy
 from bpy.props import EnumProperty
 
-from . import edit_layer, hosts, modeling
+from . import edit_layer, hosts, menu_hooks, modeling
 
 
 def _native_items(prop):
@@ -94,16 +91,8 @@ class SCENA_OT_group_origin_set(bpy.types.Operator):
         return {'FINISHED'} if changed else {'CANCELLED'}
 
 
-class _OriginLayout:
+class _OriginLayout(menu_hooks.Layout):
     """Forward the standard menu layout, routing just its Set Origin submenu."""
-    def __init__(self, layout):
-        object.__setattr__(self, "_layout", layout)
-
-    def __getattr__(self, key):
-        return getattr(self._layout, key)
-
-    def __setattr__(self, key, value):
-        setattr(self._layout, key, value)
 
     def operator_menu_enum(self, operator, *args, **kwargs):
         if operator == "object.origin_set":
@@ -111,13 +100,8 @@ class _OriginLayout:
         return self._layout.operator_menu_enum(operator, *args, **kwargs)
 
 
-def _group_menu(draw):
-    @wraps(draw)
-    def routed(self, context):
-        if context.mode == 'OBJECT' and any(hosts.definition(obj) for obj in context.selected_objects):
-            self = SimpleNamespace(layout=_OriginLayout(self.layout))
-        return draw(self, context)
-    return routed
+def _group_selected(context):
+    return context.mode == 'OBJECT' and any(hosts.definition(obj) for obj in context.selected_objects)
 
 
 _menu_hooks = []
@@ -125,19 +109,14 @@ _menu_hooks = []
 
 def register():
     for menu in (bpy.types.VIEW3D_MT_object, bpy.types.VIEW3D_MT_object_context_menu):
-        callbacks = menu._dyn_ui_initialize()
-        for index, original in enumerate(callbacks):
-            if original.__module__ == "bl_ui.space_view3d" and original.__qualname__ == menu.__name__ + ".draw":
-                routed = _group_menu(original)
-                callbacks[index] = routed
-                _menu_hooks.append((callbacks, original, routed))
-                break
+        hook = menu_hooks.install(menu, _OriginLayout, _group_selected)
+        if hook:
+            _menu_hooks.append(hook)
 
 
 def unregister():
-    for callbacks, original, routed in _menu_hooks:
-        if routed in callbacks:
-            callbacks[callbacks.index(routed)] = original
+    for hook in _menu_hooks:
+        menu_hooks.restore(hook)
     _menu_hooks.clear()
 
 

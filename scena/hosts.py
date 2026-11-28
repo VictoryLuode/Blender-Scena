@@ -292,8 +292,11 @@ def _layout_stages(tree):
 
 
 def _placement_graph():
+    from .instance_mirror import EMBEDDED
     for tree in bpy.data.node_groups:
-        if tree.library is None and tree.get(GRAPH_KEY) == 1:
+        # A saved file may contain only the layout of an arrayed placement.
+        if (tree.library is None and tree.get(GRAPH_KEY) == 1
+                and not tree.get(EMBEDDED) and not tree.get('Array Before 1')):
             _name_graph(tree)
             return tree
 

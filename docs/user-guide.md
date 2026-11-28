@@ -6,7 +6,7 @@
 
 - In Object Mode, use **Shift+A → Group** to group the selected objects. With an empty selection, it makes an empty group at the 3D Cursor. Scena stores the group definition in a separate collection.
 - The **Create Group** button has a type switch for collection instances and Geometry Nodes groups. Leave the name blank to use the active object's name. To convert existing groups, select them and use **Operations → Switch to Geometry Nodes** or **Switch to Collection**. Already matching groups and regular objects are skipped.
-- Select a group and open **Object Properties → Group Data** to rename a definition, switch definitions, or inspect where a group is used. Click the number beside a shared definition to give this placement its own definition. Member meshes remain shared.
+- Select a group and open **Item → Object** in the 3D Viewport sidebar. Use the collection icon to switch group definitions, or click the definition name to rename it. Click the number beside a shared definition to give this placement its own definition. Member meshes remain shared.
 - Choose **Edit** to edit at the selected placement. You can also select multiple placements before entering. Hidden instances stay hidden, and instances excluded from the View Layer do not prevent entering. Choose **Edit Child Group** to go deeper. **Back** goes up one level, and Shift-clicking **Back** returns directly to the scene.
 
 ## Duplicate and make variants
@@ -48,6 +48,8 @@ The mesh output exposes vertex group and UV names to native modifiers such as **
 
 Enable **Modifier Preview** on the placement to show modifier copies while editing. You can enable it after entering the group. The prototype remains editable. **Frame with Modifiers** fits the placement's outline to the evaluated result. Turn it off to frame the source. These choices are saved separately for each placement.
 
+On a Geometry Nodes group, choose **Array V2** from the Hard Ops menu to adjust count and spacing on the first invocation. For a collection instance, first choose **Operations → Switch to Geometry Nodes**.
+
 ## Export a shared scene
 
 Choose **File → Export → Scena Shared Scene (folder)**. Linked placements share an exported definition and have individual placement IDs. Save the Blender file to keep those IDs across sessions. You can hide the original, export its copy, and later export both to the same folder. Press **Esc** during export to cancel and keep the previous bundle.
@@ -73,4 +75,4 @@ In the same setup, group entry and exit took about **one-fifteenth of the previo
 
 Viewport tests cover rotated and non-uniformly scaled nested groups, undo and redo, and reopening a scene saved during group editing. To build a release, run `python tools/build_release.py <blender-executable>`. The script verifies the archive against the source, installs it in a clean Blender profile, creates both placement types, and checks that preferences persist across restarts before it writes the ZIP to `dist`.
 
-[Workflow tests](../tests/test_workflows.py) · [Nested edit tests](../tests/test_edit_depth.py) · [Viewport tests](../tests/test_viewport.py) · [Installation test](../tests/test_install.py)
+[Workflow tests](../tests/test_workflows.py) · [Nested edit tests](../tests/test_edit_depth.py) · [Viewport tests](../tests/test_viewport.py) · [Interactive array test](../tests/test_hard_ops_array.py) · [Installation test](../tests/test_install.py)

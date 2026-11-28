@@ -143,6 +143,61 @@ class GroupWorkflows(unittest.TestCase):
         for a, b in zip(actual, expected):
             self.assertAlmostEqual(a, b, places=precision)
 
+    def test_menu_hooks_preserve_other_addons_draw_callbacks(self):
+        from functools import wraps
+        from scena import menu_hooks
+
+        scena.unregister()
+        self.addCleanup(scena.register)
+        pie = bpy.types.VIEW3D_MT_object_mode_pie
+        add = bpy.types.VIEW3D_MT_add
+        local = bpy.types.VIEW3D_MT_view_local
+        select = bpy.types.VIEW3D_MT_select_object
+
+        def foreign_pie(menu, context):
+            pass
+
+        foreign_pie.__module__ = 'bl_ext.example.geo_scatter.gpl_script.ui.ui_pie'
+        foreign_pie.__name__ = 'new_object_mode_pie_draw'
+
+        @wraps(menu_hooks.native_draw(add))
+        def decorated_add(menu, context):
+            pass
+
+        @wraps(local.draw)
+        def decorated_local(menu, context):
+            pass
+
+        def early_entry(menu, context):
+            pass
+
+        def late_entry(menu, context):
+            pass
+
+        def extra_entries():
+            return [fn for fn in select.draw._draw_funcs if fn in (late_entry, early_entry)]
+
+        select.append(early_entry)
+        self.addCleanup(select.remove, early_entry)
+        with (patch.object(pie, 'draw', foreign_pie), patch.object(add, 'draw', decorated_add),
+              patch.object(local, 'draw', decorated_local)):
+            scena.register()
+            try:
+                select.prepend(late_entry)
+                self.addCleanup(select.remove, late_entry)
+                usage._hook_selection_menus()
+                self.assertIs(pie.draw, foreign_pie)
+                self.assertIs(add.draw, decorated_add)
+                self.assertIs(local.draw, decorated_local)
+                self.assertEqual(extra_entries(), [late_entry, early_entry])
+                self.assertIsNotNone(usage._select_menu_hook)
+            finally:
+                scena.unregister()
+            self.assertIs(pie.draw, foreign_pie)
+            self.assertIs(add.draw, decorated_add)
+            self.assertIs(local.draw, decorated_local)
+            self.assertEqual(extra_entries(), [late_entry, early_entry])
+
     def test_2d_fit_uses_evaluated_mesh_for_plain_group_member(self):
         bpy.ops.mesh.primitive_monkey_add(location=(0.3, -0.1, 0.2))
         member = bpy.context.active_object
@@ -203,6 +258,99 @@ class GroupWorkflows(unittest.TestCase):
             group, peer = bpy.data.objects[group_name], bpy.data.objects[peer_name]
             self.assertIsNone(editor._modifier_frame(peer))
             self.assertVectorClose(editor._modifier_frame(group)[0][-1], (4, 5, 0))
+
+    def test_nested_array_preserves_shared_graph_and_placement_settings(self):
+        from scena import instance_array, instance_mirror
+        member = flat_part('Nested panel')
+        inner = create_group([member], 'Inner', 'NODES')
+        outer = create_group([inner], 'Outer', 'NODES')
+        peer = linked_copy(outer, 20)
+        source = hosts.definition(outer)
+        shared = hosts._source_modifier(inner).node_group
+        mod = hosts._source_modifier(outer)
+        self.assertEqual(mod.node_group, shared)
+        original_interface = [s.identifier for s in shared.interface.items_tree]
+        hosts.display_input(outer, hosts.FRAME_SOCKET).value = True
+        hosts.display_input(outer, hosts.PREVIEW_SOCKET).value = False
+        array = outer.modifiers.new('Array', 'ARRAY')
+        array.count = 3
+        instance_array.sync(outer)
+        self.assertNotEqual(mod.node_group, shared)
+        self.assertEqual(hosts._source_modifier(inner).node_group, shared)
+        self.assertEqual(hosts._source_modifier(peer).node_group, shared)
+        self.assertEqual([s.identifier for s in shared.interface.items_tree], original_interface)
+        self.assertFalse(mod.node_group.get(instance_mirror.EMBEDDED))
+        self.assertEqual(hosts.definition(outer), source)
+        self.assertEqual(hosts.definition(peer), source)
+        self.assertTrue(hosts.display_input(outer, hosts.FRAME_SOCKET).value)
+        self.assertFalse(hosts.display_input(outer, hosts.PREVIEW_SOCKET).value)
+        self.assertEqual(len(visible_part_locations(member.name)), 4)
+        array.count = 4
+        self.assertEqual(len(visible_part_locations(member.name)), 5)
+        outer_name, role = outer.name, member.name
+        with tempfile.TemporaryDirectory() as folder:
+            filepath = str(Path(folder) / "Nested array.blend")
+            bpy.ops.wm.save_as_mainfile(filepath=filepath)
+            bpy.ops.wm.open_mainfile(filepath=filepath)
+            outer = bpy.data.objects[outer_name]
+            self.assertFalse(instance_array.needs_sync(outer))
+            self.assertEqual(len(visible_part_locations(role)), 5)
+
+    def test_array_uses_native_mesh_until_instances_are_requested(self):
+        from scena import instance_array
+        member = flat_part('Mesh panel')
+        group = create_group([member], 'Mesh array', 'NODES')
+        mod = hosts._source_modifier(group)
+        shared = mod.node_group
+        hosts.set_realize(group, True)
+        array = group.modifiers.new('Array', 'ARRAY')
+        array.count = 3
+        instance_array.sync(group)
+        self.assertEqual(mod.node_group, shared)
+        self.assertFalse(group.get(instance_array.BINDINGS))
+        self.assertEqual(eval_faces(group), 3)
+        hosts.set_realize(group, False)
+        instance_array.sync(group)
+        self.assertEqual(len(visible_part_locations(member.name)), 3)
+        hosts.set_realize(group, True)
+        self.assertEqual(eval_faces(group), 3)
+
+    def test_array_layout_failure_preserves_existing_bindings_and_allows_retry(self):
+        from scena import instance_array, instance_mirror
+        member = flat_part('Stacked panel', (2, 0, 0))
+        group = create_group([member], 'Stack', 'NODES', pivot='CURSOR')
+        first = group.modifiers.new('First repeat', 'ARRAY')
+        first.use_relative_offset = False
+        first.use_constant_offset = True
+        first.constant_offset_displace = (4, 0, 0)
+        instance_array.sync(group)
+        group.modifiers.new('Mirror', 'MIRROR')
+        instance_mirror._sync(group)
+        last = group.modifiers.new('Second repeat', 'ARRAY')
+        last.use_relative_offset = False
+        last.use_constant_offset = True
+        last.constant_offset_displace = (0, 10, 0)
+        mod = hosts._source_modifier(group)
+        graph = mod.node_group
+        groups = set(bpy.data.node_groups)
+        signature = group[instance_array.BINDINGS]
+        drivers = [(fc.data_path, fc.array_index) for fc in group.animation_data.drivers]
+        add_stage = instance_mirror._add_stage
+
+        def fail_after_wiring(*args, **kwargs):
+            add_stage(*args, **kwargs)
+            raise RuntimeError("Interrupted graph setup")
+
+        with patch.object(instance_mirror, '_add_stage', side_effect=fail_after_wiring):
+            with self.assertRaisesRegex(RuntimeError, "Interrupted graph setup"):
+                instance_array.sync(group)
+        self.assertEqual(mod.node_group, graph)
+        self.assertEqual(set(bpy.data.node_groups), groups)
+        self.assertEqual(group[instance_array.BINDINGS], signature)
+        self.assertEqual([(fc.data_path, fc.array_index) for fc in group.animation_data.drivers], drivers)
+        instance_array.sync(group)
+        self.assertEqual(visible_part_locations(member.name),
+                         [(x, y, 0) for x in (-6, -2, 2, 6) for y in (0, 10)])
 
     def test_modifier_frame_measures_unrealized_nested_instances(self):
         from scena import instance_array

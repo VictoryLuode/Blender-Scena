@@ -142,38 +142,56 @@ def _controls(kernel):
             if s.in_out == 'INPUT' and s.socket_type != 'NodeSocketGeometry']
 
 
-def _embed(mod, kernel, *, marker=EMBEDDED, prefix="", before=None):
-    tree = mod.node_group
-    if tree.get(marker):
-        return
-    if tree.library:
-        tree = tree.copy()
-        mod.node_group = tree
-        hosts._name_graph(tree)
-    output = next(n for n in tree.nodes if n.type == 'GROUP_OUTPUT' and n.is_active_output)
-    destination = before.inputs['Geometry'] if before else output.inputs[hosts.GEOMETRY_NAME]
-    upstream = destination.links[0].from_socket
-    inputs = next(n for n in tree.nodes if n.type == 'GROUP_INPUT')
+def _add_stage(tree, kernel, marker, *, prefix="", before=None):
+    # Interface edits rebuild group node sockets. Resolve the links only after
+    # the interface is complete, using identifiers that survive those edits.
+    controls = []
+    for control in _controls(kernel):
+        socket = tree.interface.new_socket(name=prefix + control.name, in_out='INPUT', socket_type=control.socket_type)
+        socket.hide_in_modifier = True
+        controls.append((socket.identifier, control.identifier))
     group = tree.nodes.new('GeometryNodeGroup')
-    added = []
+    group.node_tree = kernel
+    inputs = next((n for n in tree.nodes if n.type == 'GROUP_INPUT'), None)
+    output = before or next((n for n in tree.nodes if n.type == 'GROUP_OUTPUT' and n.is_active_output), None)
+    destination = output.inputs.get(hosts.GEOMETRY_NAME) if output else None
+    if inputs is None or destination is None or not destination.is_linked:
+        raise ValueError("Scena Group needs a connected geometry output to add modifier support")
+    upstream = destination.links[0].from_socket
+    for interface_id, control_id in controls:
+        source, target = inputs.outputs[interface_id], group.inputs[control_id]
+        tree.links.new(source, target)
+        source.hide = target.hide = True
+    tree.links.new(upstream, group.inputs['Geometry'])
+    tree.links.new(group.outputs['Geometry'], destination)
+    tree[marker] = True
+
+
+def _ensure_stages(mod, slots=(), *, mirror_kernel=None):
+    original = mod.node_group
+    missing = [slot for slot in slots if not original.get(slot)]
+    needs_mirror = not original.get(EMBEDDED) and (
+        mirror_kernel is not None or any(slot.startswith('Array After ') for slot in slots))
+    if not (needs_mirror or missing):
+        return
+    # Placements at different nesting levels can evaluate the same node tree.
+    # Build the entire interface off the modifier and publish it in one assignment.
+    tree = original.copy()
     try:
-        group.node_tree = kernel
-        for control in _controls(kernel):
-            socket = tree.interface.new_socket(name=prefix + control.name, in_out='INPUT', socket_type=control.socket_type)
-            added.append(socket)
-            socket.hide_in_modifier = True
-            tree.links.new(inputs.outputs[socket.identifier], group.inputs[control.identifier])
-            group.inputs[control.identifier].hide = True
-            inputs.outputs[socket.identifier].hide = True
-        tree.links.new(upstream, group.inputs['Geometry'])
-        tree.links.new(group.outputs['Geometry'], destination)
+        if original.library:
+            hosts._name_graph(tree)
+        if needs_mirror:
+            _add_stage(tree, mirror_kernel or _graph(), EMBEDDED)
+        if missing:
+            kernel = instance_array._kernel()
+            mirror = next((n for n in tree.nodes if n.type == 'GROUP' and n.node_tree and n.node_tree.get(GRAPH)), None)
+            for slot in missing:
+                before = mirror if slot.startswith('Array Before ') else None
+                _add_stage(tree, kernel, slot, prefix=slot + ' ', before=before)
         hosts._layout_stages(tree)
-        tree[marker] = True
+        mod.node_group = tree
     except Exception:
-        tree.nodes.remove(group)
-        for socket in reversed(added):
-            tree.interface.remove(socket)
-        tree.links.new(upstream, destination)
+        bpy.data.node_groups.remove(tree)
         raise
 
 
@@ -203,7 +221,7 @@ def migrate(obj):
     mod = hosts._source_modifier(obj)
     if not mod or list(obj.modifiers).index(legacy) != list(obj.modifiers).index(mod) + 1:
         return
-    _embed(mod, legacy.node_group)
+    _ensure_stages(mod, mirror_kernel=legacy.node_group)
     paths = {}
     muted = set()
     for socket in _controls(legacy.node_group):
@@ -261,7 +279,8 @@ def _enable(obj):
     if mods[0] != hosts._source_modifier(obj) or (not mirror and len(mods) != 1):
         raise ValueError("Instance Mirror needs the Group source followed by one Mirror")
     mod = mods[0]
-    _embed(mod, _graph())
+    slots = [slot for slot, _ in instance_array._slots(obj)]
+    _ensure_stages(mod, slots, mirror_kernel=_graph())
     created = mirror is None
     created_animation = obj.animation_data is None
     try:

@@ -1,10 +1,11 @@
 """Default shortcuts for Scena's 3D View object-mode tools."""
 
 import bpy
-from . import hosts
+from . import hosts, menu_hooks
 
 
 _bindings = []
+_local_menu_callbacks = None
 _keymap_name = "Object Mode"
 _menu_name = "GROUPMANAGER_MT_quick"
 _cursor_menu_name = "GROUPMANAGER_MT_cursor"
@@ -217,7 +218,11 @@ def _local_view_menu(self, context):
 
 
 def register():
-    bpy.types.VIEW3D_MT_view_local.prepend(_local_view_menu)
+    global _local_menu_callbacks
+    menu = bpy.types.VIEW3D_MT_view_local
+    if _local_menu_callbacks is None and menu_hooks.native_draw(menu) is not None:
+        menu.prepend(_local_view_menu)
+        _local_menu_callbacks = menu.draw._draw_funcs
     config = bpy.context.window_manager.keyconfigs.addon
     if config is None or _bindings:
         return
@@ -279,7 +284,10 @@ def register():
 
 
 def unregister():
-    bpy.types.VIEW3D_MT_view_local.remove(_local_view_menu)
+    global _local_menu_callbacks
+    if _local_menu_callbacks is not None and _local_view_menu in _local_menu_callbacks:
+        _local_menu_callbacks.remove(_local_view_menu)
+    _local_menu_callbacks = None
     for keymap, item in _bindings:
         keymap.keymap_items.remove(item)
     _bindings.clear()
